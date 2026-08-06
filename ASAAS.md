@@ -121,15 +121,18 @@ criada e ver o fluxo completo.
 
 ## 7. Ir para produção
 
-Quando a conta real do Asaas estiver aprovada:
+A função usa **produção fixa** (`https://api.asaas.com/v3`) — não há mais
+sandbox no código, então **não precisa** de `ASAAS_ENV`. Com a conta real do
+Asaas aprovada, basta configurar a chave de produção e publicar:
 
 ```bash
 supabase secrets set ASAAS_API_KEY='$aact_CHAVE_DE_PRODUCAO'
-supabase secrets set ASAAS_ENV='prod'
 supabase functions deploy swift-endpoint
 ```
 
-Pronto — o mesmo site passa a cobrar PIX de verdade, sem mudar nada no front.
+Pronto — o mesmo site passa a cobrar PIX (e cartão) de verdade, sem mudar nada
+no front. ⚠️ Como é produção fixa, a `ASAAS_API_KEY` precisa ser a chave de
+**produção** (do asaas.com) — uma chave de sandbox vai dar erro de autenticação.
 
 ## 8. (Opcional, próximo passo) Webhook de confirmação
 
@@ -164,10 +167,9 @@ Como funciona:
   pelo token, sem redigitar o cartão.
 
 Requisitos da Asaas para cartão: a conta precisa estar **aprovada para cartão**
-(em produção) e o cliente informa **e-mail, CEP e número** (exigência da
-operadora para o `creditCardHolderInfo`). No sandbox, use os cartões de teste da
-Asaas. Sem o deploy desta versão, o botão de cartão mostra "não foi possível
-concluir o pagamento no cartão" (e nunca confirma por engano).
+e o cliente informa **e-mail, CEP e número** (exigência da operadora para o
+`creditCardHolderInfo`). Sem o deploy desta versão, o botão de cartão mostra
+"não foi possível concluir o pagamento no cartão" (e nunca confirma por engano).
 
 ## Custos (Asaas, PIX)
 

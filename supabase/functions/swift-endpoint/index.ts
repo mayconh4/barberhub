@@ -1,6 +1,5 @@
-const ASAAS_URL = Deno.env.get("ASAAS_ENV") === "prod"
-  ? "https://api.asaas.com/v3"
-  : "https://api-sandbox.asaas.com/v3";
+// produção fixa (sem sandbox) — cobra de verdade
+const ASAAS_URL = "https://api.asaas.com/v3";
 const KEY = Deno.env.get("ASAAS_API_KEY")!;
 
 const cors = {
