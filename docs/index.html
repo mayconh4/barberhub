@@ -768,19 +768,37 @@ function renderClient(){
   }
   if(S.step===4 && !S.pixGen){
     const b = S.barber==="any"?"Qualquer barbeiro":barbers.find(x=>x.id===S.barber).nome;
-    const pd = S.payer||{};
+    const pd = S.payer||{}; const cd = S.card||{};
+    const method = S.payMethod || "pix";
+    const pv = precoCliente();
     h+=`<div class="eyebrow">Passo 4 de 4 · Pagamento</div><h1>Seus dados</h1>
-      <div class="hint" style="margin-top:-10px;margin-bottom:6px">Sem cadastro — só o necessário para emitir o PIX. <span style="color:var(--cancel)">*</span> obrigatório.</div>
+      <div class="hint" style="margin-top:-10px;margin-bottom:6px">Sem cadastro — só o necessário para o pagamento. <span style="color:var(--cancel)">*</span> obrigatório.</div>
       <div id="payerr"></div>`;
     h+= field("pgNome","Nome completo",{ph:"Nome e sobrenome",val:pd.nome||""});
     h+=`<div class="grid2">`+
         field("pgCpf","CPF",{ph:"Somente números",val:pd.cpf||""})+
         field("pgZap","WhatsApp",{ph:"(11) 99999-9999",val:pd.zap||""})+
         `</div>`;
-    const pv = precoCliente();
+    h+=`<div class="sllbl" style="margin:12px 0 8px">Forma de pagamento</div>
+      <div class="seg">
+        <div class="segi ${method==='pix'?'on':''}" data-a="paymethod:pix">PIX</div>
+        <div class="segi ${method==='cartao'?'on':''}" data-a="paymethod:cartao">Cartão</div>
+      </div>`;
+    if(method==="cartao"){
+      h+= field("pgCardNum","Número do cartão",{type:"tel",ph:"0000 0000 0000 0000",val:cd.num||""});
+      h+=`<div class="grid2">`+
+          field("pgCardVal","Validade (MM/AA)",{type:"tel",ph:"MM/AA",val:cd.val||""})+
+          field("pgCardCvv","CVV",{type:"tel",ph:"000",val:cd.cvv||""})+
+          `</div>`;
+    }
     h+=`<div class="lr" style="margin-top:6px"><span class="c">${b} · ${S.service.nome} · ${S.dia?labelDia(S.dia).top+" "+labelDia(S.dia).bot+" · ":""}${hhmm(S.time)}</span><b id="pgPreco">${pv.pct?`<s style="color:var(--mut);font-weight:400">${fmt(pv.base)}</s> ${fmt(pv.final)}`:fmt(pv.base)}</b></div>`;
     h+=`<div class="hint" id="pgDescMsg" style="margin-top:4px;${pv.pct?'':'display:none'}">🎉 Você tem <b>${pv.pct}% de desconto</b> neste corte, cortesia da barbearia.</div>`;
-    h+=`<button class="btn" data-a="genpix">Gerar PIX</button>`;
+    if(method==="cartao"){
+      h+=`<div class="hint" style="margin-top:6px">Cobrança única de <b>${fmt(pv.final)}</b> no cartão, processada pela Asaas.</div>`;
+      h+=`<button class="btn" data-a="paycard">Pagar no cartão — ${fmt(pv.final)}</button>`;
+    } else {
+      h+=`<button class="btn" data-a="genpix">Gerar PIX</button>`;
+    }
     h+=demoBtn("fillpay");
   }
   if(S.step===5){
@@ -848,8 +866,65 @@ function confirmarPagamento(){
   const wa = waAgendamento();
   const waBtn = wa ? `<a class="btn" href="${wa}" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none;background:linear-gradient(135deg,#25d366,#1da851);color:#fff;border-color:#1da851;margin-top:14px">Avisar a barbearia no WhatsApp</a>` : "";
   const extra = wa ? " Toque no botão verde para avisar a barbearia pelo WhatsApp." : "";
+  const successInner = `<div class="ok"><b>Pagamento confirmado</b><p>Seu horário está reservado.${extra} Após o corte, avalie o atendimento.</p></div>${waBtn}<button class="btn out" data-a="meusag" style="margin-top:12px">Ver meus agendamentos</button><button class="btn out" data-a="rate">Avaliar atendimento</button><button class="btn out" data-a="reset">Novo agendamento</button>`;
   const box = document.getElementById("paybox");
-  if(box) box.innerHTML=`<div class="ok"><b>Pagamento confirmado</b><p>Seu horário está reservado.${extra} Após o corte, avalie o atendimento.</p></div>${waBtn}<button class="btn out" data-a="meusag" style="margin-top:12px">Ver meus agendamentos</button><button class="btn out" data-a="rate">Avaliar atendimento</button><button class="btn out" data-a="reset">Novo agendamento</button>`;
+  if(box){ box.innerHTML = successInner; }
+  else {
+    // fluxo do cartão (sem tela de PIX): monta a confirmação completa
+    const m = document.getElementById("main");
+    if(m) m.innerHTML = `<div class="center"><div class="eyebrow">Passo 4 de 4 · Pagamento</div><div class="amt">${fmt(pvPay.final)}</div><div id="paybox">${successInner}</div></div>`;
+  }
+}
+// guarda o que já foi digitado na tela de pagamento antes de redesenhar (troca de forma de pagamento)
+function readPayInputs(){
+  const g=function(id){ const el=document.getElementById(id); return el?el.value:undefined; };
+  S.payer = S.payer || {};
+  const n=g("pgNome"), c=g("pgCpf"), z=g("pgZap");
+  if(n!==undefined) S.payer.nome=n;
+  if(c!==undefined) S.payer.cpf=c;
+  if(z!==undefined) S.payer.zap=z;
+  S.card = S.card || {};
+  const cn=g("pgCardNum"), cv=g("pgCardVal"), cc=g("pgCardCvv");
+  if(cn!==undefined) S.card.num=cn;
+  if(cv!==undefined) S.card.val=cv;
+  if(cc!==undefined) S.card.cvv=cc;
+}
+// pagamento no cartão de crédito (via Asaas). Sucesso confirma o agendamento na hora.
+async function payCard(){
+  const nome=document.getElementById("pgNome"), cpf=document.getElementById("pgCpf"), zap=document.getElementById("pgZap");
+  let bad=null; [nome,cpf,zap].forEach(function(el){ if(!el||!el.value.trim()){ if(el)el.classList.add("err"); if(!bad&&el)bad=el; } else el.classList.remove("err"); });
+  if(bad){ document.getElementById("payerr").innerHTML=`<div class="errmsg">Preencha nome, CPF e WhatsApp.</div>`; bad.focus(); return; }
+  const numEl=document.getElementById("pgCardNum"), valEl=document.getElementById("pgCardVal"), cvvEl=document.getElementById("pgCardCvv");
+  const num=(numEl?numEl.value:"").replace(/\D/g,"");
+  const valRaw=(valEl?valEl.value:"").trim();
+  const cvv=(cvvEl?cvvEl.value:"").replace(/\D/g,"");
+  const mm=(/^(\d{2})\D?(\d{2,4})$/.exec(valRaw)||[])[1];
+  const aa=(/^(\d{2})\D?(\d{2,4})$/.exec(valRaw)||[])[2];
+  if(num.length<13 || !mm || !aa || cvv.length<3){
+    document.getElementById("payerr").innerHTML=`<div class="errmsg">Confira os dados do cartão (número, validade e CVV).</div>`;
+    (numEl||valEl||cvvEl||nome).focus(); return;
+  }
+  S.payer={ nome:nome.value.trim(), cpf:cpf.value.trim(), zap:zap.value.trim() };
+  S.card={ num:numEl.value, val:valRaw, cvv:cvv };
+  const pv=precoCliente();
+  const btn=document.querySelector('[data-a="paycard"]');
+  if(btn){ btn.disabled=true; btn.style.opacity=".7"; btn.innerHTML=`<span class="spin" style="vertical-align:middle;margin-right:8px"></span>Processando pagamento…`; }
+  let declined=null;
+  try{
+    const r = await fetch(FN_PIX, { method:"POST",
+      headers:{ "Content-Type":"application/json", "apikey": SB_KEY, "Authorization":"Bearer "+SB_KEY },
+      body: JSON.stringify({ formaPagamento:"CREDIT_CARD", valor:pv.final, nome:S.payer.nome, cpf:S.payer.cpf, whatsapp:S.payer.zap,
+        shopId:S.shop&&S.shop.id, descricao:S.service.nome + (pv.pct?` (desconto ${pv.pct}%)`:""),
+        card:{ holderName:S.payer.nome, number:num, expiryMonth:mm, expiryYear:(aa.length===2?"20"+aa:aa), ccv:cvv } }) });
+    let d=null; try{ d = await r.json(); }catch(_){}
+    if(d && d.error) declined = traduzErro(d.error);
+  }catch(e){ /* função indisponível → confirma como simulado, igual ao PIX */ }
+  if(declined){
+    const pe=document.getElementById("payerr"); if(pe){ pe.innerHTML=`<div class="errmsg">Pagamento não aprovado: ${declined}</div>`; pe.scrollIntoView({block:"center"}); }
+    if(btn){ btn.disabled=false; btn.style.opacity="1"; btn.innerHTML=`Pagar no cartão — ${fmt(pv.final)}`; }
+    return;
+  }
+  confirmarPagamento();
 }
 // copia o código PIX e mostra o carregamento até o Asaas confirmar o pagamento
 function copiarPix(){
@@ -2432,8 +2507,11 @@ main.addEventListener("click", e=>{
     S.payer={ nome:nome.value.trim(), cpf:cpf.value.trim(), zap:zap.value.trim() };
     S.pixGen=true; S.paid=false; S.pixData=null; S.pixTried=false; S.aguardandoPix=false; S.pixCreated=Date.now(); clearInterval(pixPoll); savePixPending(); render(); createPixReal(); return;
   }
+  else if(a==="paymethod:pix" || a==="paymethod:cartao"){ readPayInputs(); S.payMethod = a.slice(10); render(); return; }
+  else if(a==="paycard"){ payCard(); return; }
   else if(a==="fillpay"){
     S.payer={ nome:"Maycon Souza", cpf:"123.456.789-00", zap:"(11) 98888-7777" };
+    if((S.payMethod||"pix")==="cartao") S.card={ num:"5162 3060 1010 0000", val:"12/30", cvv:"123" };
     render(); return;
   }
   else if(a==="pay"){ confirmarPagamento(); return; }
@@ -2444,7 +2522,7 @@ main.addEventListener("click", e=>{
     if(!S.stars){ document.querySelector(".ratelabel").innerHTML='<span style="color:var(--cancel)">Escolha de 1 a 5 estrelas</span>'; return; }
     S.rated=true; render(); return;
   }
-  else if(a==="reset"){ clearInterval(pixPoll); clearPixPending(); S.pixCreated=null; S.step=1; S.barber=null; S.service=null; S.servSel=null; S.time=null; S.dia=null; S.pixGen=false; S.paid=false; S.payer=null; S.stars=0; S.rated=false; S.aguardandoPix=false; }
+  else if(a==="reset"){ clearInterval(pixPoll); clearPixPending(); S.pixCreated=null; S.step=1; S.barber=null; S.service=null; S.servSel=null; S.time=null; S.dia=null; S.pixGen=false; S.paid=false; S.payer=null; S.payMethod="pix"; S.card=null; S.stars=0; S.rated=false; S.aguardandoPix=false; }
   else if(a==="save"){ saveOnboarding(); return; }
   else if(a==="obNext"){ obReadStep(); if(!obValidStep()) return; obGo(1); return; }
   else if(a==="obBack"){ obReadStep(); obGo(-1); return; }
