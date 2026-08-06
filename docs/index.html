@@ -810,7 +810,7 @@ function renderClient(){
         });
         h+=`<button class="btn out" data-a="usenewcard" style="margin-top:2px">Usar outro cartão</button>`;
       } else {
-        h+=`<label style="display:flex;align-items:center;gap:8px;margin:10px 2px 4px;font-size:13.5px;color:var(--mut);cursor:pointer"><input type="checkbox" id="pgSaveCard" ${S.saveCard===false?"":"checked"} style="width:16px;height:16px"> Salvar este cartão para as próximas</label>`;
+        h+=`<label style="display:flex;align-items:center;gap:8px;margin:10px 2px 4px;font-size:13.5px;color:var(--mut);cursor:pointer"><input type="checkbox" id="pgSaveCard" ${S.saveCard===false?"":"checked"} style="width:16px;height:16px"> Preenche automático no próximo corte</label>`;
         h+=`<div class="hint" style="margin-top:2px">Cobrança única de <b>${fmt(pv.final)}</b> no cartão, via Asaas. Guardamos só um <b>token seguro</b> e os 4 últimos dígitos — nunca o número completo ou o CVV.</div>`;
         h+=`<button class="btn" data-a="paycard">Pagar no cartão — ${fmt(pv.final)}</button>`;
         if(cards.length) h+=`<button class="btn out" data-a="cancelnewcard" style="margin-top:8px">Voltar aos cartões salvos</button>`;
