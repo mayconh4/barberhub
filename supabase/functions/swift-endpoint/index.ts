@@ -11,8 +11,12 @@ const cors = {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
-    const { valor, nome, cpf, whatsapp, descricao, paymentId, shopId } = await req.json();
+    const { valor, nome, cpf, whatsapp, email, descricao, paymentId, shopId,
+      formaPagamento, card, creditCardToken, holderInfo } = await req.json();
     const h = { "Content-Type": "application/json", access_token: KEY };
+    const ehCartao = formaPagamento === "CREDIT_CARD";
+    // IP do cliente — a Asaas exige em cobranças no cartão
+    const remoteIp = (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || undefined;
 
     // consulta de status: o app chama com { paymentId } até o PIX ser pago
     if (paymentId) {
@@ -31,7 +35,7 @@ Deno.serve(async (req) => {
       const fone = String(whatsapp || "").replace(/\D/g, "");
       const criar = (comFone: boolean) => fetch(`${ASAAS_URL}/customers`, {
         method: "POST", headers: h,
-        body: JSON.stringify({ name: nome, cpfCnpj: doc, ...(comFone && fone ? { mobilePhone: fone } : {}) }),
+        body: JSON.stringify({ name: nome, cpfCnpj: doc, ...(email ? { email } : {}), ...(comFone && fone ? { mobilePhone: fone } : {}) }),
       }).then((r) => r.json());
       let novo = await criar(true);
       // telefone rejeitado pelo Asaas? cria sem telefone em vez de travar a venda
@@ -57,12 +61,51 @@ Deno.serve(async (req) => {
       } catch (_) { /* sem wallet: 100% fica na conta principal */ }
     }
 
-    // 2) cobrança PIX com vencimento hoje
+    const hoje = new Date().toISOString().slice(0, 10);
+
+    // 2a) cobrança no CARTÃO (cartão novo ou token salvo) — confirma na hora
+    if (ehCartao) {
+      const fone = String(whatsapp || "").replace(/\D/g, "");
+      const corpo: Record<string, unknown> = {
+        customer: customerId, billingType: "CREDIT_CARD", value: valor,
+        dueDate: hoje, description: descricao,
+        ...(split ? { split } : {}),
+        ...(remoteIp ? { remoteIp } : {}),
+      };
+      if (creditCardToken) {
+        // cartão já salvo: cobra pelo token, sem redigitar os dados
+        corpo.creditCardToken = creditCardToken;
+      } else {
+        // cartão novo: a Asaas tokeniza e devolve o token para as próximas
+        corpo.creditCard = {
+          holderName: card?.holderName || nome,
+          number: String(card?.number || "").replace(/\D/g, ""),
+          expiryMonth: card?.expiryMonth, expiryYear: card?.expiryYear, ccv: card?.ccv,
+        };
+        corpo.creditCardHolderInfo = {
+          name: nome, email, cpfCnpj: doc,
+          postalCode: String(holderInfo?.postalCode || "").replace(/\D/g, ""),
+          addressNumber: String(holderInfo?.addressNumber || "s/n"),
+          ...(fone ? { mobilePhone: fone, phone: fone } : {}),
+        };
+      }
+      const pg = await (await fetch(`${ASAAS_URL}/payments`, {
+        method: "POST", headers: h, body: JSON.stringify(corpo),
+      })).json();
+      if (!pg.id) throw new Error(JSON.stringify(pg.errors || pg));
+      return new Response(JSON.stringify({
+        paymentId: pg.id, status: pg.status,
+        creditCardToken: pg.creditCard?.creditCardToken,
+        last4: pg.creditCard?.creditCardNumber, brand: pg.creditCard?.creditCardBrand,
+      }), { headers: { ...cors, "Content-Type": "application/json" } });
+    }
+
+    // 2b) cobrança PIX com vencimento hoje
     const cob = await (await fetch(`${ASAAS_URL}/payments`, {
       method: "POST", headers: h,
       body: JSON.stringify({
         customer: customerId, billingType: "PIX", value: valor,
-        dueDate: new Date().toISOString().slice(0, 10), description: descricao,
+        dueDate: hoje, description: descricao,
         ...(split ? { split } : {}),
       }),
     })).json();

@@ -794,6 +794,12 @@ function renderClient(){
           field("pgCardVal","Validade (MM/AA)",{type:"tel",ph:"MM/AA",val:cd.val||""})+
           field("pgCardCvv","CVV",{type:"tel",ph:"000",val:cd.cvv||""})+
           `</div>`;
+      h+= field("pgEmail","E-mail",{type:"email",ph:"voce@email.com",val:pd.email||""});
+      h+=`<div class="grid2">`+
+          field("pgCep","CEP",{type:"tel",ph:"00000-000",val:pd.cep||""})+
+          field("pgNumero","Número",{type:"tel",ph:"Nº",val:pd.numero||""})+
+          `</div>`;
+      h+=`<div class="formnote" style="margin:-4px 2px 8px;font-size:12px;color:var(--mut)">E-mail e endereço são exigidos pela operadora para cobrar no cartão.</div>`;
     }
     h+=`<div class="lr" style="margin-top:6px"><span class="c">${b} · ${S.service.nome} · ${S.dia?labelDia(S.dia).top+" "+labelDia(S.dia).bot+" · ":""}${hhmm(S.time)}</span><b id="pgPreco">${pv.pct?`<s style="color:var(--mut);font-weight:400">${fmt(pv.base)}</s> ${fmt(pv.final)}`:fmt(pv.base)}</b></div>`;
     h+=`<div class="hint" id="pgDescMsg" style="margin-top:4px;${pv.pct?'':'display:none'}">🎉 Você tem <b>${pv.pct}% de desconto</b> neste corte, cortesia da barbearia.</div>`;
@@ -907,29 +913,38 @@ function readPayInputs(){
   if(cn!==undefined) S.card.num=cn;
   if(cv!==undefined) S.card.val=cv;
   if(cc!==undefined) S.card.cvv=cc;
+  const em=g("pgEmail"), cep=g("pgCep"), numero=g("pgNumero");
+  if(em!==undefined) S.payer.email=em;
+  if(cep!==undefined) S.payer.cep=cep;
+  if(numero!==undefined) S.payer.numero=numero;
 }
 // lê e valida nome/CPF/WhatsApp (comuns a cartão e cartão salvo). Retorna false se faltar algo.
 function lerPagador(){
   const nome=document.getElementById("pgNome"), cpf=document.getElementById("pgCpf"), zap=document.getElementById("pgZap");
   let bad=null; [nome,cpf,zap].forEach(function(el){ if(!el||!el.value.trim()){ if(el)el.classList.add("err"); if(!bad&&el)bad=el; } else el.classList.remove("err"); });
   if(bad){ const pe=document.getElementById("payerr"); if(pe) pe.innerHTML=`<div class="errmsg">Preencha nome, CPF e WhatsApp.</div>`; bad.focus(); return false; }
-  S.payer={ nome:nome.value.trim(), cpf:cpf.value.trim(), zap:zap.value.trim() };
+  const g=function(id){ const el=document.getElementById(id); return el?el.value.trim():""; };
+  S.payer={ nome:nome.value.trim(), cpf:cpf.value.trim(), zap:zap.value.trim(), email:g("pgEmail")||(S.payer&&S.payer.email)||"", cep:g("pgCep")||(S.payer&&S.payer.cep)||"", numero:g("pgNumero")||(S.payer&&S.payer.numero)||"" };
   return true;
 }
 // dispara a cobrança no cartão (Asaas Edge Function). `extra` traz o cartão OU o token salvo.
+// Só considera pago quando a Asaas devolve status confirmado — nunca confirma sem cobrar.
 async function chargeCard(extra){
   const pv=precoCliente();
   const base={ formaPagamento:"CREDIT_CARD", valor:pv.final, nome:S.payer.nome, cpf:S.payer.cpf, whatsapp:S.payer.zap,
-    shopId:S.shop&&S.shop.id, descricao:S.service.nome + (pv.pct?` (desconto ${pv.pct}%)`:"") };
+    email:S.payer.email||"", shopId:S.shop&&S.shop.id, descricao:S.service.nome + (pv.pct?` (desconto ${pv.pct}%)`:"") };
   try{
     const r = await fetch(FN_PIX, { method:"POST",
       headers:{ "Content-Type":"application/json", "apikey": SB_KEY, "Authorization":"Bearer "+SB_KEY },
       body: JSON.stringify(Object.assign(base, extra||{})) });
     let d=null; try{ d = await r.json(); }catch(_){}
     if(d && d.error) return { declined: traduzErro(d.error) };
-    return { ok:true, data:d||{} };
-  }catch(e){ return { ok:true, data:{} }; }   // função indisponível → confirma como simulado, igual ao PIX
+    const st = d && d.status;
+    if(st==="CONFIRMED" || st==="RECEIVED" || st==="RECEIVED_IN_CASH" || (d && d.paid===true)) return { ok:true, data:d };
+    return { pending:true, data:d||{} };   // resposta sem confirmação de cartão → NÃO confirma
+  }catch(e){ return { fail:true }; }
 }
+const CARD_PEND = "Não foi possível concluir o pagamento no cartão agora. Tente novamente ou use o PIX.";
 function payBusy(btn, txt){ if(btn){ btn.disabled=true; btn.style.opacity=".7"; btn.innerHTML=`<span class="spin" style="vertical-align:middle;margin-right:8px"></span>${txt||"Processando pagamento…"}`; } }
 function payErro(btn, msg, restore){
   const pe=document.getElementById("payerr"); if(pe){ pe.innerHTML=`<div class="errmsg">${msg}</div>`; pe.scrollIntoView({block:"center"}); }
@@ -948,17 +963,26 @@ async function payCard(){
     document.getElementById("payerr").innerHTML=`<div class="errmsg">Confira os dados do cartão (número, validade e CVV).</div>`;
     (numEl||valEl||cvvEl).focus(); return;
   }
+  const emailEl=document.getElementById("pgEmail"), cepEl=document.getElementById("pgCep"), numeroEl=document.getElementById("pgNumero");
+  const email=(emailEl?emailEl.value:"").trim(), cep=(cepEl?cepEl.value:"").replace(/\D/g,""), numero=(numeroEl?numeroEl.value:"").trim();
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || cep.length<8 || !numero){
+    document.getElementById("payerr").innerHTML=`<div class="errmsg">Informe e-mail válido, CEP e número (exigidos pela operadora do cartão).</div>`;
+    (!/@/.test(email)?emailEl:(cep.length<8?cepEl:numeroEl)).focus(); return;
+  }
+  S.payer.email=email; S.payer.cep=cep; S.payer.numero=numero;
   S.card={ num:numEl.value, val:valRaw, cvv:cvv };
   const saveEl=document.getElementById("pgSaveCard"); const doSave = saveEl ? saveEl.checked : true; S.saveCard=doSave;
   const pv=precoCliente();
   const btn=document.querySelector('[data-a="paycard"]');
   payBusy(btn);
-  const res = await chargeCard({ card:{ holderName:S.payer.nome, number:num, expiryMonth:mm, expiryYear:(aa.length===2?"20"+aa:aa), ccv:cvv } });
+  const res = await chargeCard({ card:{ holderName:S.payer.nome, number:num, expiryMonth:mm, expiryYear:(aa.length===2?"20"+aa:aa), ccv:cvv },
+    holderInfo:{ postalCode:cep, addressNumber:numero } });
   if(res.declined){ payErro(btn, "Pagamento não aprovado: "+res.declined, `Pagar no cartão — ${fmt(pv.final)}`); return; }
+  if(res.pending || res.fail){ payErro(btn, CARD_PEND, `Pagar no cartão — ${fmt(pv.final)}`); return; }
   if(doSave){
     const d=res.data||{};
     const tok = d.creditCardToken || (d.creditCard && d.creditCard.creditCardToken);
-    if(tok) saveCardRec(S.payer.zap, { token:tok, last4:num.slice(-4), brand:(d.creditCard&&d.creditCard.creditCardBrand)||cardBrand(num), holder:S.payer.nome });
+    if(tok) saveCardRec(S.payer.zap, { token:tok, last4:num.slice(-4), brand:d.brand||(d.creditCard&&d.creditCard.creditCardBrand)||cardBrand(num), holder:S.payer.nome });
   }
   confirmarPagamento();
 }
@@ -967,11 +991,11 @@ async function payWithToken(idx){
   if(!lerPagador()) return;
   const cards=getSavedCards(S.payer.zap); const c=cards[idx];
   if(!c){ S.useNewCard=true; render(); return; }
-  const pv=precoCliente();
   const btn=document.querySelector('[data-a="paysaved:'+idx+'"]');
   payBusy(btn, "Pagando…");
   const res = await chargeCard({ creditCardToken: c.token });
   if(res.declined){ payErro(btn, "Pagamento não aprovado: "+res.declined+". Tente outro cartão.", "Pagar"); return; }
+  if(res.pending || res.fail){ payErro(btn, CARD_PEND, "Pagar"); return; }
   confirmarPagamento();
 }
 // copia o código PIX e mostra o carregamento até o Asaas confirmar o pagamento
@@ -1475,7 +1499,7 @@ async function accLogout(){ try{ await sb.auth.signOut(); }catch(e){} S.authEmai
 function zapKey(v){ let d=String(v||"").replace(/\D/g,""); if(d.length>11 && d.slice(0,2)==="55") d=d.slice(2); return d; }
 // Dados do cliente (para pré-preencher o próximo pagamento). Só no aparelho dele.
 function getClientePerfil(){ try{ return JSON.parse(localStorage.getItem("sb_cliente_perfil")||"null")||{}; }catch(e){ return {}; } }
-function setClientePerfil(p){ try{ if(p&&(p.nome||p.cpf||p.zap)) localStorage.setItem("sb_cliente_perfil", JSON.stringify({nome:p.nome||"",cpf:p.cpf||"",zap:p.zap||""})); }catch(e){} }
+function setClientePerfil(p){ try{ if(p&&(p.nome||p.cpf||p.zap)){ const a=getClientePerfil(); localStorage.setItem("sb_cliente_perfil", JSON.stringify({nome:p.nome||a.nome||"",cpf:p.cpf||a.cpf||"",zap:p.zap||a.zap||"",email:p.email||a.email||"",cep:p.cep||a.cep||"",numero:p.numero||a.numero||""})); } }catch(e){} }
 // Cartões salvos por WhatsApp — guardamos APENAS o token da Asaas + 4 últimos dígitos (nunca o número/CVV).
 function getSavedCards(zap){ const k=zapKey(zap); if(!k) return []; try{ return JSON.parse(localStorage.getItem("sb_cards_"+k)||"[]"); }catch(e){ return []; } }
 function saveCardRec(zap, rec){ const k=zapKey(zap); if(!k||!rec||!rec.token) return; try{ let a=getSavedCards(zap).filter(function(c){ return c.token!==rec.token; }); a.unshift(rec); localStorage.setItem("sb_cards_"+k, JSON.stringify(a.slice(0,3))); }catch(e){} }
@@ -2571,7 +2595,7 @@ main.addEventListener("click", e=>{
   else if(a==="cancelnewcard"){ readPayInputs(); S.useNewCard=false; render(); return; }
   else if(a.startsWith("delcard:")){ readPayInputs(); const z=(S.payer&&S.payer.zap)||getClientePerfil().zap; delSavedCard(z, +a.slice(8)); if(!getSavedCards(z).length) S.useNewCard=false; render(); return; }
   else if(a==="fillpay"){
-    S.payer={ nome:"Maycon Souza", cpf:"123.456.789-00", zap:"(11) 98888-7777" };
+    S.payer={ nome:"Maycon Souza", cpf:"123.456.789-00", zap:"(11) 98888-7777", email:"maycon@teste.com", cep:"01001-000", numero:"100" };
     if((S.payMethod||"pix")==="cartao") S.card={ num:"5162 3060 1010 0000", val:"12/30", cvv:"123" };
     render(); return;
   }

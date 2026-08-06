@@ -141,6 +141,34 @@ Hoje o cliente toca em "Já paguei". Para confirmar automaticamente:
    Supabase atualiza a agenda na hora. Peça que eu gere essa função quando
    quiser ativar.
 
+## 9. Cartão de crédito (além do PIX)
+
+O checkout também aceita **cartão**. A mesma `swift-endpoint` já trata isso — o
+arquivo `supabase/functions/swift-endpoint/index.ts` deste repositório está
+atualizado (não use o trecho simplificado da seção 4, que é só PIX). Basta
+publicar de novo:
+
+```bash
+supabase functions deploy swift-endpoint
+```
+
+Como funciona:
+- Quando o app envia `formaPagamento: "CREDIT_CARD"` + `card` + `holderInfo`
+  (CEP e número) + `email`, a função cria uma cobrança `billingType: CREDIT_CARD`
+  e devolve `{ status, paymentId, creditCardToken, last4, brand }`.
+- O app só confirma o agendamento se o `status` vier `CONFIRMED`/`RECEIVED` —
+  nunca confirma sem cobrança aprovada.
+- **Salvar cartão:** quando o cliente marca "Preenche automático no próximo
+  corte", o app guarda só o `creditCardToken` + os 4 últimos dígitos (nunca o
+  número completo/CVV). Nas próximas, envia `creditCardToken` e a função cobra
+  pelo token, sem redigitar o cartão.
+
+Requisitos da Asaas para cartão: a conta precisa estar **aprovada para cartão**
+(em produção) e o cliente informa **e-mail, CEP e número** (exigência da
+operadora para o `creditCardHolderInfo`). No sandbox, use os cartões de teste da
+Asaas. Sem o deploy desta versão, o botão de cartão mostra "não foi possível
+concluir o pagamento no cartão" (e nunca confirma por engano).
+
 ## Custos (Asaas, PIX)
 
 - Sandbox: grátis.
