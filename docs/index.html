@@ -128,6 +128,10 @@
   .seg{ display:flex; gap:6px; background:rgba(255,255,255,.45); border:1px solid var(--stroke); border-radius:14px; padding:5px; margin-bottom:16px; }
   .segi{ flex:1; text-align:center; padding:9px; font-size:13px; font-weight:600; color:var(--mut); cursor:pointer; border-radius:10px; }
   .segi.on{ color:#A6791E; background:rgba(255,255,255,.8); box-shadow:0 2px 6px rgba(31,38,75,.08); }
+  .qhelp{ display:inline-flex; align-items:center; justify-content:center; width:17px; height:17px; border-radius:50%; border:1px solid var(--mut); color:var(--mut); font-size:11px; font-weight:800; line-height:1; cursor:pointer; flex:none; user-select:none; }
+  .qhelp:hover{ color:#A6791E; border-color:#A6791E; }
+  .modalov{ position:fixed; inset:0; z-index:9999; background:rgba(20,15,8,.6); display:flex; align-items:center; justify-content:center; padding:24px; backdrop-filter:blur(3px); }
+  .modalbx{ background:var(--card,#fff); border-radius:20px; padding:22px; max-width:340px; width:100%; box-shadow:0 20px 60px rgba(0,0,0,.28); }
   .chip.ok{ background:rgba(52,199,89,.18); color:#1f8f3e; }
   .btn.small{ width:auto; margin:0; padding:9px 16px; font-size:13px; border-radius:12px; }
   .rstar{ color:#C2912E; }
@@ -817,7 +821,7 @@ function renderClient(){
         h+=`<button class="btn out" data-a="usenewcard" style="margin-top:2px">Usar outro cartão</button>`;
       } else {
         h+=`<label style="display:flex;align-items:center;gap:8px;margin:10px 2px 4px;font-size:13.5px;color:var(--mut);cursor:pointer"><input type="checkbox" id="pgSaveCard" ${S.saveCard===false?"":"checked"} style="width:16px;height:16px"> Preenche automático no próximo corte</label>`;
-        h+=`<div class="hint" style="margin-top:2px">Cobrança única de <b>${fmt(pv.final)}</b> no cartão, via Asaas. Guardamos só um <b>token seguro</b> e os 4 últimos dígitos — nunca o número completo ou o CVV.</div>`;
+        h+=`<div class="hint" style="margin-top:2px;display:flex;align-items:center;gap:6px">🔒 Compra segura <span class="qhelp" data-a="secinfo" role="button" tabindex="0" aria-label="Dúvidas sobre o pagamento">?</span></div>`;
         h+=`<button class="btn" data-a="paycard">Pagar no cartão — ${fmt(pv.final)}</button>`;
         if(cards.length) h+=`<button class="btn out" data-a="cancelnewcard" style="margin-top:8px">Voltar aos cartões salvos</button>`;
       }
@@ -997,6 +1001,21 @@ async function payWithToken(idx){
   if(res.declined){ payErro(btn, "Pagamento não aprovado: "+res.declined+". Tente outro cartão.", "Pagar"); return; }
   if(res.pending || res.fail){ payErro(btn, CARD_PEND, "Pagar"); return; }
   confirmarPagamento();
+}
+// pop-up "Compra segura" — abre só ao clicar no (?)
+function openSecInfo(){
+  if(document.getElementById("secOv")) return;
+  const ov=document.createElement("div");
+  ov.id="secOv"; ov.className="modalov";
+  ov.innerHTML=`<div class="modalbx">
+    <div style="display:flex;align-items:center;gap:8px;font-weight:800;font-size:16px;margin-bottom:10px">🔒 Compra segura</div>
+    <div style="font-size:13.5px;line-height:1.55;color:var(--mut,#555)">Sua segurança é nossa prioridade.<br><br>Nunca armazenamos o número completo do seu cartão nem o código de segurança (CVV). As informações do pagamento são processadas com segurança com criptografia de ponta a ponta.</div>
+    <button class="btn" id="secClose" style="margin-top:16px">Entendi</button>
+  </div>`;
+  document.body.appendChild(ov);
+  const fechar=function(){ const el=document.getElementById("secOv"); if(el) el.remove(); };
+  ov.addEventListener("click", function(e){ if(e.target===ov) fechar(); });
+  const bt=document.getElementById("secClose"); if(bt) bt.addEventListener("click", fechar);
 }
 // copia o código PIX e mostra o carregamento até o Asaas confirmar o pagamento
 function copiarPix(){
@@ -2590,6 +2609,7 @@ main.addEventListener("click", e=>{
   }
   else if(a==="paymethod:pix" || a==="paymethod:cartao"){ readPayInputs(); S.payMethod = a.slice(10); render(); return; }
   else if(a==="paycard"){ payCard(); return; }
+  else if(a==="secinfo"){ openSecInfo(); return; }
   else if(a.startsWith("paysaved:")){ payWithToken(+a.slice(9)); return; }
   else if(a==="usenewcard"){ readPayInputs(); S.useNewCard=true; render(); return; }
   else if(a==="cancelnewcard"){ readPayInputs(); S.useNewCard=false; render(); return; }
