@@ -873,9 +873,38 @@ function renderClient(){
   if(S.step===4 && S.pixGen) startTimer();
 }
 // confirmação do pagamento: usada pelo botão "Já paguei" e pelo polling do Asaas
+// som de conclusão do pagamento (PIX ou cartão): duas notas suaves em sine puro — limpo e minimalista
+let _payAC = null;
+function playPaySound(){
+  try{
+    window.__paySoundPlayed = (window.__paySoundPlayed||0) + 1;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if(!AC) return;
+    _payAC = _payAC || new AC();
+    const ctx = _payAC;
+    if(ctx.state === "suspended"){ try{ ctx.resume(); }catch(_){} }
+    const t0 = ctx.currentTime + 0.02;
+    const out = ctx.createGain();
+    out.gain.value = 0.9;
+    out.connect(ctx.destination);
+    // quinta ascendente (G5 -> D6), ataque rápido e decaimento suave
+    [ { f:783.99, t:0.00, d:0.42, g:0.15 },
+      { f:1174.66, t:0.10, d:0.55, g:0.12 } ].forEach(function(n){
+      const osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.type = "sine"; osc.frequency.value = n.f;
+      const s = t0 + n.t;
+      g.gain.setValueAtTime(0.0001, s);
+      g.gain.exponentialRampToValueAtTime(n.g, s + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, s + n.d);
+      osc.connect(g); g.connect(out);
+      osc.start(s); osc.stop(s + n.d + 0.05);
+    });
+  }catch(e){}
+}
 function confirmarPagamento(){
   if(S.paid) return;
   S.paid=true;
+  playPaySound();
   clearInterval(pixPoll); clearPixPending(); S.pixCreated=null;
   const nomeCli = (S.payer&&S.payer.nome)||"Você";
   const pvPay = precoCliente();
