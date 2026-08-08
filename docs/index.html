@@ -2171,7 +2171,15 @@ function renderAdmin(){
     const walletBtn = sp.asaas_wallet
       ? `<span class="chip ok">Split ativo</span>`
       : `<button class="btn out small" data-a="admWallet:${sp.id}">💸 Ativar split</button>`;
+    const faltas=[];
+    if(!sp.ativo) faltas.push("aprovar");
+    if(!planoOk(sp)) faltas.push("plano/mês grátis");
+    if(sp.lat==null || sp.lng==null) faltas.push("localização");
+    const aviso = faltas.length
+      ? `<div class="sb" style="color:#a86400;margin-top:6px">⚠️ Não aparece pro cliente — falta: ${faltas.join(" + ")}${faltas.indexOf("localização")<0?' (confira também 1 barbeiro)':''}</div>`
+      : `<div class="sb" style="color:#1f8f3e;margin-top:6px">✅ Aparece pro cliente (se tiver 1 barbeiro)</div>`;
     h += `<div class="box" style="margin-bottom:10px"><div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><div class="nm" style="font-size:15px">${sp.nome||"(sem nome)"}</div><div class="sb">${sp.responsavel||""}${sp.email?" · "+sp.email:""}</div><div class="sb">${sp.bairro||""} ${sp.cep||""}</div></div>${trialChip}${st}</div>
+      ${aviso}
       <div class="fidwrap" style="justify-content:flex-end;gap:8px;flex-wrap:wrap"><button class="btn out small" data-a="svcOpen:${sp.id}:admin">Serviços</button><button class="btn out small" data-a="admBarb:${sp.id}">Barbeiros</button><button class="btn out small" data-a="shopEdit:${sp.id}:admin">Editar</button>${trialBtn}${walletBtn}${btn}<button class="btn out small" data-a="admDel:${sp.id}" style="color:var(--cancel);border-color:rgba(255,59,48,.35)">Excluir</button></div></div>`;
   });
   h += `<button class="btn out" data-a="account" style="margin-top:14px">Voltar</button>`;
