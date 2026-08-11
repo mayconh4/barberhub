@@ -624,7 +624,8 @@ const SVC_ICON_PALETTE = [
 // o ícone pode ser um SVG interno (chave) OU uma imagem enviada (data URI)
 function isImgIcon(v){ return typeof v==="string" && v.slice(0,5)==="data:"; }
 function iconValido(v){ return !!(v && (isImgIcon(v) || ICONS[v])); }
-function iconHtml(v, size){ size=size||23; if(isImgIcon(v)) return `<img src="${v}" alt="" style="width:${size}px;height:${size}px;object-fit:cover;border-radius:6px;display:block">`; return ICONS[v] || ""; }
+// imagem preenche TODO o ícone (.ic); SVG interno mantém o tamanho padrão
+function iconHtml(v, size){ if(isImgIcon(v)) return `<img src="${v}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block">`; return ICONS[v] || ""; }
 // galeria de ícones do próprio dono (imagens), por aparelho
 function getMyIcons(){ try{ return JSON.parse(localStorage.getItem("sb_myicons")||"[]"); }catch(e){ return []; } }
 function saveMyIcons(a){ try{ localStorage.setItem("sb_myicons", JSON.stringify((a||[]).slice(0,30))); }catch(e){} }
