@@ -395,6 +395,17 @@ function setShopFoto(id, data){ try{ localStorage.setItem("sb_shopfoto_"+id, dat
 function getBarberFoto(id){ try{ return localStorage.getItem("sb_barberfoto_"+id)||""; }catch(e){ return ""; } }
 function setBarberFoto(id, data){ try{ localStorage.setItem("sb_barberfoto_"+id, data); }catch(e){} }
 function barberAvatarHtml(b, size){ size=size||44; const f=(b&&b.foto)||getBarberFoto(b&&b.id); if(f) return `<img src="${f}" alt="" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;flex:none">`; return `<div class="av" style="width:${size}px;height:${size}px;flex:none">${ini((b&&b.nome)||"?")}</div>`; }
+// login (e-mail) de cada barbeiro — no banco (barbers.email) + cópia local
+function getBarberEmail(b){ if(!b) return ""; if(b.email) return b.email; try{ return localStorage.getItem("sb_barberemail_"+b.id)||""; }catch(e){ return ""; } }
+function setBarberEmailLocal(id, email){ try{ if(email) localStorage.setItem("sb_barberemail_"+id, String(email).toLowerCase()); else localStorage.removeItem("sb_barberemail_"+id); }catch(e){} }
+// procura o barbeiro (equipe) dono de um e-mail de login
+async function acharBarbeiroPorEmail(email){
+  const e = String(email||"").trim().toLowerCase(); if(!e) return null;
+  const mem = (S.allBarbers||[]).find(function(x){ return (x.email||"").toLowerCase()===e; });
+  if(mem) return mem;
+  try{ const { data } = await sb.from("barbers").select("*").eq("email", e); if(data && data.length) return data[0]; }catch(_){}
+  return null;
+}
 // avatar de terceiros (equipe/rede): usa a foto do perfil se existir, senão iniciais
 function pAvatar(p, size){
   size = size||44;
@@ -1643,6 +1654,7 @@ async function loadShopAgenda(shop){
   // só re-renderiza onde a agenda está de fato à vista (evita apagar o aviso de "Barbearia cadastrada")
   if(S.role==="client" && S.step===3) render();
   if(S.role==="barber" && S.tab==="agenda") render();
+  if(S.role==="barberSelf") render();
 }
 // ocupação (intervalos) da barbearia num dia, para o barbeiro escolhido (ou qualquer)
 function ocupDoDia(dia, barbeiroNome){
@@ -1651,6 +1663,49 @@ function ocupDoDia(dia, barbeiroNome){
     if(!barbeiroNome) return true;                       // "qualquer": toda ocupação conta
     return !a.barbeiro || a.barbeiro===barbeiroNome;     // específico: os dele + os sem barbeiro definido
   }).map(function(a){ return { ini:Number(a.minuto), fim:Number(a.minuto)+apptDur(a.servico) }; });
+}
+// barbeiro da equipe logado: abre a própria agenda (só os agendamentos dele)
+async function abrirAgendaBarbeiro(b){
+  S.barberSelf = b; S.role = "barberSelf"; S.shopAgenda=undefined; render();
+  let shop=null;
+  try{
+    const { data: links } = await sb.from("barber_shops").select("shop_id").eq("barber_id", b.id);
+    if(links && links.length){ const { data: shops } = await sb.from("shops").select("*").eq("id", links[0].shop_id); if(shops && shops.length) shop=shops[0]; }
+  }catch(e){}
+  S.barberSelfShop = shop;
+  if(shop){ S.shopAgenda=undefined; loadShopAgenda(shop); } else { S.shopAgenda=[]; render(); }
+}
+function renderBarberSelf(){
+  tabbar.style.display="none"; steps.style.display="none";
+  const b = S.barberSelf||{}; const nome = b.nome||"Barbeiro";
+  let h = `<div class="eyebrow">Bem-vindo</div><h1 class="bg">Olá, ${nome.split(" ")[0]}</h1>`;
+  h += `<div class="box" style="margin-bottom:14px;display:flex;align-items:center;gap:12px">${barberAvatarHtml(b,48)}<div style="flex:1"><div class="nm" style="font-size:16px">${nome}</div><div class="sb">${(b.especialidades||[]).join(" · ")||"Barbeiro"}${S.barberSelfShop?" · "+S.barberSelfShop.nome:""}</div></div></div>`;
+  h += `<div class="sllbl" style="margin:4px 0 8px">Minha agenda</div>`;
+  const ags = (S.shopAgenda||[]).slice().filter(function(a){ return a.status!=="cancelado" && a.barbeiro && a.barbeiro===nome; })
+    .sort(function(a,b2){ return (a.dia||"").localeCompare(b2.dia||"") || (Number(a.minuto)-Number(b2.minuto)); });
+  if(S.shopAgenda===undefined || S.shopAgenda===null){
+    h += `<div class="lr" style="justify-content:center;color:var(--mut)"><span class="spin" style="margin-right:8px"></span>Carregando sua agenda…</div>`;
+  } else if(!ags.length){
+    h += `<div class="lr" style="justify-content:center;color:var(--mut)">Nenhum agendamento com o seu nome ainda.</div>`;
+  } else {
+    const stBg={pago:"rgba(52,199,89,.18)",aguardando:"rgba(255,159,10,.2)"}, stFg={pago:"#1f8f3e",aguardando:"#a86400"}, stLab={pago:"Pago",aguardando:"Aguarda"};
+    let curDia="";
+    ags.forEach(function(a){
+      if(a.dia!==curDia){ curDia=a.dia; const l=a.dia?labelDia(a.dia):null; h+=`<div class="sllbl" style="margin:16px 0 8px">${l?l.top+" · "+l.bot:(a.dia||"")}</div>`; }
+      const zap=zapKey(a.cliente_zap);
+      const waMsg=encodeURIComponent(`Olá ${a.cliente_nome||''}! Aqui é o ${nome} 💈 Sobre o seu horário de ${hhmm(a.minuto)}.`);
+      const waBtn=zap?`<a class="wabtn" href="https://wa.me/55${zap}?text=${waMsg}" target="_blank" rel="noopener"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15l-1.3 4.7 4.8-1.3A10 10 0 1 0 12 2zm5.9 14.3c-.2.7-1.4 1.3-2 1.4-.5.1-1.2.1-1.9-.1-.4-.1-1-.3-1.7-.6-3-1.3-4.9-4.3-5-4.5-.2-.2-1.2-1.6-1.2-3s.7-2.1 1-2.4c.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 2c.1.1.1.3 0 .5l-.4.5-.3.3c-.2.2-.3.4-.2.6.2.4.8 1.3 1.6 2 .9.9 1.7 1.1 2 1.3.2.1.4.1.6-.1l.7-.9c.2-.2.4-.2.6-.1l1.9.9c.3.1.4.2.5.3.1.2.1.7-.1 1.3z"/></svg>WhatsApp</a>`:"";
+      h+=`<div class="ag" style="flex-direction:column;align-items:stretch;gap:10px">
+        <div style="display:flex;align-items:center;gap:14px">
+          <div class="hm">${hhmm(a.minuto)}</div>
+          <div style="flex:1"><div class="who">${a.cliente_nome||'Cliente'}</div><div class="sv">${a.servico||'Serviço'} · ${fmt(Number(a.preco||0))}</div></div>
+          <div class="chip" style="background:${stBg[a.status]||stBg.pago};color:${stFg[a.status]||stFg.pago}">${stLab[a.status]||a.status||''}</div>
+        </div>${waBtn?`<div class="fidwrap" style="border-top-color:rgba(0,0,0,.05);justify-content:flex-end">${waBtn}</div>`:""}
+      </div>`;
+    });
+  }
+  h += `<button class="btn out" data-a="accLogout" style="margin-top:16px">Sair</button>`;
+  main.innerHTML = h;
 }
 function abrirMeusAg(){
   S.role="meusag"; S.agList=undefined;
@@ -2477,6 +2532,19 @@ function renderAdminBarbers(){
     h += espCustomRow("beEspCustom", "beEspAdd", S.beEspDraft);
     h += `<button class="btn" data-a="beEspSave">Salvar</button>`;
     h += `<button class="btn out" data-a="beEspCancel" style="margin-top:10px">Cancelar</button>`;
+    // ----- Login do barbeiro (acesso próprio à agenda) -----
+    const bemail = getBarberEmail(b);
+    h += `<div class="sllbl" style="margin:22px 0 8px">Login do barbeiro (acesso)</div>`;
+    if(bemail){
+      h += `<div class="box"><div class="lr" style="border:none;padding:0"><span class="c">Login (e-mail)</span><b style="word-break:break-all">${bemail}</b></div>
+        <div class="hint" style="margin-top:8px">O barbeiro entra em <b>Minha conta</b> com esse e-mail e a senha definida, e vê a própria agenda. Esqueceu a senha? Ele usa "Esqueci a senha" na tela de login.</div></div>`;
+    } else {
+      h += `<div class="box">`+
+        field("beLoginEmail","E-mail do barbeiro (login)",{req:false,type:"email",ph:"barbeiro@email.com",val:""})+
+        field("beLoginPass","Senha inicial",{req:false,type:"password",ph:"Mínimo 6 caracteres",val:""})+
+        `<div class="hint" style="margin:2px 0 8px">Cria um acesso para o barbeiro ver a própria agenda. Anote a senha e passe pra ele.</div>`+
+        `<button class="btn out small" data-a="beLoginCreate" style="margin:0">Criar login</button></div>`;
+    }
     main.innerHTML = h; return;
   }
   const inShop = links.map(function(l){ return all.find(function(b){ return b.id===l.barber_id; }) || {id:l.barber_id, nome:"(barbeiro)"}; });
@@ -2485,7 +2553,8 @@ function renderAdminBarbers(){
   h += `<div class="sllbl" style="margin:4px 0 8px">Na equipe</div>`;
   if(!inShop.length) h += `<div class="lr" style="justify-content:center;color:var(--mut)">Nenhum barbeiro nesta barbearia ainda.</div>`;
   inShop.forEach(function(b){
-    h += `<div class="box" style="margin-bottom:10px;border-color:var(--gold)"><div style="display:flex;align-items:center;gap:10px">${barberAvatarHtml(b,44)}<div style="flex:1"><div class="nm" style="font-size:15px">${b.nome}</div><div class="sb">${(b.especialidades||[]).join(" · ")||"sem especialidades"}</div></div></div>
+    const em = getBarberEmail(b);
+    h += `<div class="box" style="margin-bottom:10px;border-color:var(--gold)"><div style="display:flex;align-items:center;gap:10px">${barberAvatarHtml(b,44)}<div style="flex:1"><div class="nm" style="font-size:15px">${b.nome}</div><div class="sb">${(b.especialidades||[]).join(" · ")||"sem especialidades"}</div><div class="sb" style="margin-top:2px">${em?`🔑 ${em}`:`<span style="color:var(--mut)">sem login</span>`}</div></div></div>
       <div class="fidwrap" style="justify-content:flex-end;gap:8px;margin-top:8px"><button class="btn out small" data-a="admBarbEd:${b.id}">Editar</button><button class="btn out small" data-a="admBarbDel:${b.id}">Retirar</button></div></div>`;
   });
   if(out.length){
@@ -2584,6 +2653,33 @@ async function beEspSave(){
   if(err){ barbErr(opFail("Não foi possível salvar os dados do barbeiro.", err)); return; }
   S.espEdit=null; S.beEspDraft="";
   await admBarbOpen(S.barbShop.id);
+}
+// cria o login (e-mail + senha) do barbeiro SEM deslogar o admin (cliente Supabase temporário)
+async function criarLoginBarbeiro(){
+  const ed = S.espEdit; if(!ed) return;
+  const emEl=document.getElementById("beLoginEmail"), pwEl=document.getElementById("beLoginPass");
+  const email=(emEl?emEl.value:"").trim().toLowerCase(), pass=(pwEl?pwEl.value:"");
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ barbErr("Informe um e-mail válido para o login."); if(emEl)emEl.focus(); return; }
+  if(pass.length<6){ barbErr("A senha precisa ter ao menos 6 caracteres."); if(pwEl)pwEl.focus(); return; }
+  const btn=document.querySelector('[data-a="beLoginCreate"]'); if(btn){ btn.disabled=true; btn.style.opacity=".7"; btn.textContent="Criando login…"; }
+  let err=null;
+  try{
+    // cliente TEMPORÁRIO e isolado: cria a conta sem tocar na sessão do admin
+    const tmp = window.supabase.createClient(SB_URL, SB_KEY, { auth:{ persistSession:false, autoRefreshToken:false, storageKey:"sb-newbarber" } });
+    const r = await tmp.auth.signUp({ email:email, password:pass });
+    if(r.error){ err=r.error; }
+    else {
+      const uid = r.data && r.data.user ? r.data.user.id : null;
+      setBarberEmailLocal(ed.barber.id, email);
+      ed.barber.email = email;
+      const bg=(S.allBarbers||[]).find(function(x){ return x.id===ed.barber.id; }); if(bg) bg.email=email;
+      try{ await sb.from("barbers").update({ email:email, user_id:uid }).eq("id", ed.barber.id); }catch(e){}
+    }
+    try{ if(tmp.auth.signOut) tmp.auth.signOut(); }catch(_){}
+  }catch(e){ err=e; }
+  if(btn){ btn.disabled=false; btn.style.opacity="1"; }
+  if(err){ barbErr(opFail("Não foi possível criar o login.", err)); return; }
+  render();
 }
 
 /* ---------- Edição completa da barbearia (admin) ---------- */
@@ -2709,6 +2805,7 @@ function render(){
   else if(S.role==="account") renderAccount();
   else if(S.role==="admin") renderAdmin();
   else if(S.role==="meusag") renderMeusAg();
+  else if(S.role==="barberSelf") renderBarberSelf();
   else renderBarber();
   // rola até o "Agendar agora" ao escolher um horário (iOS/Android)
   if(S._scrollAgendar){
@@ -2884,6 +2981,7 @@ main.addEventListener("click", e=>{
   else if(a.startsWith("beEspTg:")){ const nEl=document.getElementById("beNome"); if(nEl&&S.espEdit) S.espEdit.nome=nEl.value; const tEl=document.getElementById("beTel"); if(tEl&&S.espEdit) S.espEdit.tel=tEl.value; const c=document.getElementById("beEspCustom"); if(c) S.beEspDraft=c.value; const k=a.slice(8); const sel=S.espEdit.sel; const ix=sel.indexOf(k); if(ix>=0) sel.splice(ix,1); else sel.push(k); render(); return; }
   else if(a==="beEspAdd"){ const nEl=document.getElementById("beNome"); if(nEl&&S.espEdit) S.espEdit.nome=nEl.value; const tEl=document.getElementById("beTel"); if(tEl&&S.espEdit) S.espEdit.tel=tEl.value; const c=document.getElementById("beEspCustom"); const v=cleanEsp(c&&c.value); if(v && S.espEdit && S.espEdit.sel.indexOf(v)<0) S.espEdit.sel.push(v); S.beEspDraft=""; render(); return; }
   else if(a==="beEspSave"){ beEspSave(); return; }
+  else if(a==="beLoginCreate"){ criarLoginBarbeiro(); return; }
   else if(a==="beEspCancel"){ S.espEdit=null; S.beEspDraft=""; render(); return; }
   else if(a==="admEditSave"){ admEditSave(); return; }
   else if(a==="admEditBack"){ editExit(); return; }
@@ -2930,6 +3028,11 @@ async function goMinhaConta(){
 // decide a tela conforme o perfil da conta logada
 async function routeByPerfil(tab){
   const t = getPtype() || (isFreela() ? "freelancer" : "");
+  // barbeiro da equipe? (conta ligada a um registro em barbers.email) — cai na própria agenda
+  if(t!=="cliente" && t!=="studio" && t!=="freelancer"){
+    const b = await acharBarbeiroPorEmail(S.authEmail);
+    if(b){ abrirAgendaBarbeiro(b); return; }
+  }
   if(t==="cliente"){ S.role="clientPanel"; render(); return; }
   if(t==="freelancer"){
     if(!profile) profile = loadFreela();
@@ -2945,7 +3048,7 @@ async function routeByPerfil(tab){
 // Seta de voltar no cabeçalho — só aparece onde há para onde voltar
 function canBack(){
   if(S.svcShop||S.barbShop||S.editShop||S.espEdit) return true;
-  if(S.role==="onboarding"||S.role==="chooseType"||S.role==="cadastroEnviado"||S.role==="admin"||S.role==="barber"||S.role==="clientPanel"||S.role==="meusag") return true;
+  if(S.role==="onboarding"||S.role==="chooseType"||S.role==="cadastroEnviado"||S.role==="admin"||S.role==="barber"||S.role==="clientPanel"||S.role==="meusag"||S.role==="barberSelf") return true;
   if(S.role==="account") return true;
   if(S.role==="client") return !!(S.shop || S.pixGen);
   return false;
@@ -2960,7 +3063,7 @@ function navBack(){
   if(S.role==="chooseType"){ S.role="client"; render(); return; }
   if(S.role==="cadastroEnviado"){ S.role="client"; S.step=1; S.shop=null; render(); return; }
   if(S.role==="admin"){ S.role="account"; S.accStage="home"; render(); return; }
-  if(S.role==="barber"||S.role==="clientPanel"){ goHome(); return; }
+  if(S.role==="barber"||S.role==="clientPanel"||S.role==="barberSelf"){ goHome(); return; }
   if(S.role==="meusag"){ S.role="client"; render(); return; }
   if(S.role==="account"){
     const stc=S.accStage||"home";
