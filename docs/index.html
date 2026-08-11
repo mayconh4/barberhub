@@ -612,8 +612,24 @@ const ICONS = {
   // presente cheio
   gift: SV('<path d="M11 8H4.6c-.6 0-1.1.5-1.1 1.1v2.3c0 .4.3.7.7.7H11V8Zm2 0v4.1h6.8c.4 0 .7-.3.7-.7V9.1c0-.6-.5-1.1-1.1-1.1H13Zm-2 6H5v6.1c0 .5.4.9.9.9H11v-7Zm2 0v7h5.1c.5 0 .9-.4.9-.9V14h-6ZM8.2 3.3C9.7 2.8 11 4.4 11.6 6.3H9.9c-1.1 0-2.1-.5-2.4-1.4-.2-.7.1-1.4.7-1.6Zm7.6 0c.6.2.9.9.7 1.6-.3.9-1.3 1.4-2.4 1.4h-1.7C13 4.4 14.3 2.8 15.8 3.3Z"/>'),
 };
-// ícone do serviço escolhido pelo NOME (mais específico) e, por fim, pela categoria
+// paleta de ícones que o admin pode escolher por serviço
+const SVC_ICON_PALETTE = [
+  {key:"scissors",label:"Tesoura"},{key:"comb",label:"Pente"},{key:"combo",label:"Corte+Barba"},
+  {key:"beard",label:"Barba"},{key:"razor",label:"Navalha"},{key:"spray",label:"Spray"},
+  {key:"shine",label:"Brilho"},{key:"eyebrow",label:"Sobrancelha"},{key:"kid",label:"Infantil"},
+  {key:"star",label:"Estrela"},{key:"user",label:"Pessoa"},{key:"gift",label:"Presente"},
+];
+// escolha manual do ícone (coluna `icone` na nuvem, ou cópia local por id)
+function svcIconOverride(s){
+  if(!s) return "";
+  if(s.icone && ICONS[s.icone]) return s.icone;
+  try{ const v = localStorage.getItem("sb_svcicon_"+s.id); if(v && ICONS[v]) return v; }catch(e){}
+  return "";
+}
+// ícone do serviço: escolha manual do admin > pelo NOME > pela categoria
 function svcIcon(s){
+  const ov = svcIconOverride(s);
+  if(ov) return ICONS[ov];
   const n = (s && s.nome ? s.nome : "").toLowerCase();
   const has = re => re.test(n);
   if(has(/infantil|kids?|crian|júnior|junior/)) return ICONS.kid;
@@ -2124,11 +2140,41 @@ function renderAdmin(){
   }
   const tab = S.admTab || "visao";
   let h = `<div class="eyebrow">Administração · SeuBarba</div><h1 class="bg">Central da plataforma</h1>
-    <div class="seg" style="margin-bottom:14px">
-      <div class="segi ${tab==='visao'?'on':''}" data-a="admTab:visao">Visão geral</div>
+    <div class="seg" style="margin-bottom:14px;overflow-x:auto">
+      <div class="segi ${tab==='visao'?'on':''}" data-a="admTab:visao">Visão</div>
       <div class="segi ${tab==='pag'?'on':''}" data-a="admTab:pag">Pagamentos</div>
       <div class="segi ${tab==='barb'?'on':''}" data-a="admTab:barb">Barbearias</div>
+      <div class="segi ${tab==='icones'?'on':''}" data-a="admTab:icones">Ícones</div>
     </div>`;
+
+  if(tab==="icones"){
+    h += `<div class="hint" style="margin-top:-6px;margin-bottom:12px">Escolha o ícone de cada serviço. "Automático" usa o ícone pelo nome do serviço.</div>`;
+    if(S.admSvcs===undefined || S.admSvcs===null){ admSvcLoad(); h += `<div class="lr" style="justify-content:center;color:var(--mut)"><span class="spin" style="margin-right:8px"></span>Carregando serviços…</div>`; }
+    else if(!S.admSvcs.length){ h += `<div class="lr" style="justify-content:center;color:var(--mut)">Nenhum serviço cadastrado ainda.</div>`; }
+    else {
+      const shops = S.adminShops||[];
+      const shopName = id => (shops.find(x=>x.id===id)||{}).nome || "Sem barbearia";
+      const byShop = {}; S.admSvcs.forEach(sv=>{ (byShop[sv.shop_id]=byShop[sv.shop_id]||[]).push(sv); });
+      Object.keys(byShop).forEach(sid=>{
+        h += `<div class="sllbl" style="margin:14px 0 8px">${shopName(sid)}</div>`;
+        byShop[sid].sort((a,b)=>(a.nome||"").localeCompare(b.nome||"")).forEach(sv=>{
+          const cur = svcIconOverride(sv);
+          h += `<div class="box" style="margin-bottom:10px">
+            <div style="display:flex;align-items:center;gap:12px">
+              <div class="ic">${svcIcon(sv)}</div>
+              <div style="flex:1"><div class="nm" style="font-size:15px">${sv.nome||"(serviço)"}</div><div class="sb">${cur?"ícone escolhido":"ícone automático"}</div></div>
+              ${cur?`<button class="btn out small" data-a="svcIcon:${sv.id}:" style="margin:0">Automático</button>`:""}
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
+              ${SVC_ICON_PALETTE.map(p=>`<div data-a="svcIcon:${sv.id}:${p.key}" title="${p.label}" role="button" style="width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;background:${cur===p.key?'var(--accent)':'rgba(0,0,0,.08)'};color:${cur===p.key?'#fff':'var(--accent)'}">${ICONS[p.key]}</div>`).join("")}
+            </div>
+          </div>`;
+        });
+      });
+    }
+    h += `<button class="btn out" data-a="account" style="margin-top:14px">Voltar</button>`;
+    main.innerHTML=h; return;
+  }
 
   if(tab==="visao"){
     const shops = S.adminShops||[];
@@ -2225,6 +2271,18 @@ async function admPayLoad(){
   if(S.role==="admin") render();
 }
 async function admLoad(){ if(!isAdmin()){ S.adminShops=[]; return; } try{ const { data } = await sb.from("shops").select("*").order("criado_em",{ascending:false}); S.adminShops=data||[]; }catch(e){ S.adminShops=[]; } render(); }
+// carrega todos os serviços (para a aba Ícones do admin)
+async function admSvcLoad(){ if(!isAdmin()){ S.admSvcs=[]; return; } try{ const { data } = await sb.from("services").select("*"); S.admSvcs=data||[]; }catch(e){ S.admSvcs=[]; } render(); }
+// define/limpa o ícone manual de um serviço
+function setSvcIcon(id, key){
+  if(key && !ICONS[key]) return;
+  try{ if(key) localStorage.setItem("sb_svcicon_"+id, key); else localStorage.removeItem("sb_svcicon_"+id); }catch(e){}
+  (S.admSvcs||[]).forEach(function(x){ if(x.id===id) x.icone=key||null; });
+  const g = (typeof services!=="undefined"?services:[]).find(function(x){ return x.id===id; }); if(g) g.icone=key||"";
+  // grava na nuvem (coluna `icone`; erro ignorado se a coluna não existir)
+  try{ sb.from("services").update({ icone:key||null }).eq("id", id).then(function(r){ if(r&&r.error) console.log("icone (nuvem):", r.error.message); }); }catch(e){}
+  render();
+}
 // cria a subconta Asaas da barbearia para o split de pagamentos
 async function admWallet(id){
   if(!isAdmin()) return;
@@ -2770,8 +2828,9 @@ main.addEventListener("click", e=>{
   else if(a.startsWith("fpsvc:")){ const key=a.slice(6); const fp=profile||loadFreela()||{}; if(!fp.svc) fp.svc={}; if(fp.svc[key]) delete fp.svc[key]; else { const c=CATALOGO.find(x=>x.key===key); if(c) fp.svc[key]={dur:c.dur}; } profile=fp; render(); return; }
   else if(a==="freelaPanel"){ if(!profile) profile=loadFreela(); S.role="barber"; S.tab="rede"; render(); return; }
   else if(a==="expandir"){ S.barberType="dono"; S.role="onboarding"; S.obStep=null; S.obDraft=null; render(); return; }
-  else if(a==="toAdmin"){ if(!isAdmin()) return; S.role="admin"; S.admTab="visao"; render(); admLoad(); return; }
+  else if(a==="toAdmin"){ if(!isAdmin()) return; S.role="admin"; S.admTab="visao"; S.admSvcs=undefined; render(); admLoad(); return; }
   else if(a.startsWith("admTab:")){ if(!isAdmin()) return; S.admTab=a.slice(7); render(); return; }
+  else if(a.startsWith("svcIcon:")){ if(!isAdmin()) return; const rest=a.slice(8); const i=rest.lastIndexOf(":"); setSvcIcon(rest.slice(0,i), rest.slice(i+1)); return; }
   else if(a==="admPayReload"){ if(!isAdmin()) return; S.admPay=null; render(); return; }
   else if(a.startsWith("admTrial:")){ if(!isAdmin()) return; const p=a.split(":"); admTrial(p[1], p[2]==="1"); return; }
   else if(a.startsWith("admWallet:")){ if(!isAdmin()) return; admWallet(a.slice(10)); return; }
@@ -2933,7 +2992,7 @@ async function hydrate(){
       barbers = rBarbers.data.map(b=>({ id:b.id, nome:b.nome, esp:b.especialidades||[], tel:b.telefone||'', foto:b.foto||getBarberFoto(b.id)||'', pct:0.4 }));
     }
     if(rSvcs.data && rSvcs.data.length){
-      services = rSvcs.data.map(s=>({ id:s.id, nome:s.nome, preco:Number(s.preco), dur:s.duracao_min, shop_id:s.shop_id, cat:s.categoria }));
+      services = rSvcs.data.map(s=>({ id:s.id, nome:s.nome, preco:Number(s.preco), dur:s.duracao_min, shop_id:s.shop_id, cat:s.categoria, icone:s.icone||"" }));
     }
     console.log('SeuBarba: dados carregados do Supabase');
     restorePixPending();
