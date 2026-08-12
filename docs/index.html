@@ -673,6 +673,20 @@ function svcIcon(s){
   const byCat = { cabelo:ICONS.scissors, barba:ICONS.beard, estetica:ICONS.spray, sobrancelha:ICONS.eyebrow };
   return (s && byCat[s.cat]) || ICONS.scissors;
 }
+// ordem fixa dos serviços no passo 2 (Corte, Corte+Barba, Barba, Pigmentação, Platinado, Infantil, Sobrancelha)
+function svcOrder(nome){
+  const n = String(nome||"").toLowerCase();
+  const has = re => re.test(n);
+  if(has(/infantil|kids?|crian/)) return 6;
+  if(has(/sobrancelha/)) return 7;
+  if(has(/pigment/)) return 4;
+  if(has(/platinad|descolor|luzes|mechas/)) return 5;
+  const c = has(/corte|cabelo|social|degrad|fade|m[aá]quina/), b = has(/barba|bigode/);
+  if(c && b) return 2;   // corte + barba
+  if(c) return 1;        // corte masculino
+  if(b) return 3;        // barba
+  return 8;              // outros serviços vão para o fim
+}
 
 // Retorna TODOS os horários do dia com o status de cada um.
 // { m: minutos, ok: disponível?, motivo: 'passou' | 'almoco' | 'ocupado' | '' }
@@ -794,7 +808,8 @@ function renderClient(){
     if(!S.servSel) S.servSel = (S.service && (S.service.ids || [S.service.id])) || [];
     h+=`<div class="eyebrow">${S.shop?S.shop.nome+" · ":""}Passo 2 de 4</div><h1>O que vamos fazer?</h1>`;
     h+=`<div class="hint" style="margin-top:-10px;margin-bottom:10px">Toque para marcar — pode escolher mais de um serviço.</div>`;
-    const svcList = services.filter(function(x){ return !S.shop || !x.shop_id || x.shop_id===S.shop.id; });
+    const svcList = services.filter(function(x){ return !S.shop || !x.shop_id || x.shop_id===S.shop.id; })
+      .sort(function(a,b){ return svcOrder(a.nome)-svcOrder(b.nome) || (a.nome||"").localeCompare(b.nome||""); });
     if(!svcList.length) h+=`<div class="lr" style="justify-content:center;color:var(--mut)">Esta barbearia ainda não cadastrou serviços.</div>`;
     svcList.forEach(s=>{ const on=S.servSel.indexOf(s.id)>=0;
       h+=`<div class="tile ${on?'sel':''}" data-a="s:${s.id}"><div class="ic">${svcIcon(s)}</div><div><div class="nm">${s.nome}</div><div class="sb">${s.dur} minutos</div></div><div class="pr">${on?"✓ ":""}${fmt(s.preco)}</div></div>`; });
