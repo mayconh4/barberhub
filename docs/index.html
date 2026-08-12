@@ -1111,9 +1111,9 @@ function lerPagador(){
 // Só considera pago quando a Asaas devolve status confirmado — nunca confirma sem cobrar.
 async function chargeCard(extra){
   const pv=precoCliente();
-  const base={ formaPagamento:"CREDIT_CARD", valor:pv.final, nome:S.payer.nome, cpf:S.payer.cpf, whatsapp:S.payer.zap,
-    email:S.payer.email||"", shopId:S.shop&&S.shop.id, serviceIds:svcIds(), descPct:pv.pct||0,
-    descricao:S.service.nome + (pv.pct?` (desconto ${pv.pct}%)`:"") };
+  // envia SÓ identificadores + dados do pagador. valor/desconto/split são do servidor.
+  const base={ formaPagamento:"CREDIT_CARD", nome:S.payer.nome, cpf:S.payer.cpf, whatsapp:S.payer.zap,
+    email:S.payer.email||"", shopId:S.shop&&S.shop.id, serviceIds:svcIds(), dia:S.dia, minuto:S.time };
   try{
     const r = await fetch(FN_PIX, { method:"POST",
       headers:{ "Content-Type":"application/json", "apikey": SB_KEY, "Authorization":"Bearer "+SB_KEY },
@@ -3344,7 +3344,7 @@ async function createPixReal(){
     const r = await fetch(FN_PIX, {
       method:"POST",
       headers:{ "Content-Type":"application/json", "apikey": SB_KEY, "Authorization":"Bearer "+SB_KEY },
-      body: JSON.stringify((function(){ const pv=precoCliente(); return { valor:pv.final, nome:S.payer.nome, cpf:S.payer.cpf, whatsapp:S.payer.zap, shopId: S.shop && S.shop.id, serviceIds:svcIds(), descPct:pv.pct||0, descricao:S.service.nome + (pv.pct?` (desconto ${pv.pct}%)`:"") }; })())
+      body: JSON.stringify({ nome:S.payer.nome, cpf:S.payer.cpf, whatsapp:S.payer.zap, shopId: S.shop && S.shop.id, serviceIds:svcIds(), dia:S.dia, minuto:S.time })
     });
     const d = await r.json();
     if(d && d.qrImage){ S.pixData = { qrImage:d.qrImage, copiaECola:d.copiaECola, paymentId:d.paymentId }; savePixPending(); startPixPoll(); }

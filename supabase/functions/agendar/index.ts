@@ -48,16 +48,17 @@ Deno.serve(async (req) => {
     // 1) Preço RECALCULADO no servidor a partir do catálogo da loja.
     let base = 0;
     let nomeServico = String(b.servico || "").slice(0, 160);
-    if (serviceIds.length) {
-      let q = db.from("services").select("nome,preco,shop_id").in("id", serviceIds);
-      if (shopId) q = q.eq("shop_id", shopId);           // só serviços DESTA loja
-      const { data: svcs, error } = await q;
+    const uniqIds = Array.from(new Set(serviceIds.filter((x) => typeof x === "string")));
+    if (uniqIds.length && shopId) {
+      const { data: svcs, error } = await db.from("services")
+        .select("nome,preco,shop_id").in("id", uniqIds).eq("shop_id", shopId);
       if (error) return json({ error: "falha ao ler serviços" }, 500);
-      if (!svcs || !svcs.length) return json({ error: "serviços inválidos" }, 400);
+      // TODOS os serviços têm de existir E pertencer à loja (senão o registro seria adulterável)
+      if (!svcs || svcs.length !== uniqIds.length) return json({ error: "serviço inválido para esta loja" }, 400);
       base = svcs.reduce((t: number, s: { preco: number }) => t + Number(s.preco || 0), 0);
       nomeServico = svcs.map((s: { nome: string }) => s.nome).join(" + ");
     } else {
-      return json({ error: "serviceIds obrigatório" }, 400);
+      return json({ error: "shopId e serviceIds obrigatórios" }, 400);
     }
     // desconto AUTORITATIVO do banco (ignora qualquer percentual mandado pelo cliente)
     let pct = 0;
