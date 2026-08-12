@@ -11,7 +11,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
     const { valor, nome, cpf, whatsapp, email, descricao, paymentId, shopId,
-      formaPagamento, card, creditCardToken, holderInfo } = await req.json();
+      formaPagamento, card, creditCardToken, holderInfo, serviceIds, descPct } = await req.json();
     const h = { "Content-Type": "application/json", access_token: KEY };
     const ehCartao = formaPagamento === "CREDIT_CARD";
     // IP do cliente — a Asaas exige em cobranças no cartão
@@ -60,13 +60,32 @@ Deno.serve(async (req) => {
       } catch (_) { /* sem wallet: 100% fica na conta principal */ }
     }
 
+    // valor AUTORITATIVO: recalculado do catálogo da loja. NÃO confia no "valor"
+    // enviado pelo cliente (anti-adulteração de preço). Desconto limitado a 0..90%.
+    let valorFinal = Number(valor) || 0;
+    const ids = (Array.isArray(serviceIds) ? serviceIds : [])
+      .filter((x: unknown) => typeof x === "string" && /^[0-9a-fA-F-]{36}$/.test(x));
+    if (ids.length && shopId) {
+      try {
+        const su = Deno.env.get("SUPABASE_URL")!;
+        const sk = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        const svcs = await (await fetch(
+          `${su}/rest/v1/services?shop_id=eq.${shopId}&id=in.(${ids.join(",")})&select=preco`,
+          { headers: { apikey: sk, Authorization: `Bearer ${sk}` } },
+        )).json();
+        const base = (svcs || []).reduce((t: number, s: { preco: number }) => t + Number(s.preco || 0), 0);
+        const pct = Math.max(0, Math.min(90, Number(descPct) || 0));
+        if (base > 0) valorFinal = Math.round(base * (1 - pct / 100) * 100) / 100;
+      } catch (_) { /* mantém o valor recebido se a consulta falhar */ }
+    }
+
     const hoje = new Date().toISOString().slice(0, 10);
 
     // 2a) cobrança no CARTÃO (cartão novo ou token salvo) — confirma na hora
     if (ehCartao) {
       const fone = String(whatsapp || "").replace(/\D/g, "");
       const corpo: Record<string, unknown> = {
-        customer: customerId, billingType: "CREDIT_CARD", value: valor,
+        customer: customerId, billingType: "CREDIT_CARD", value: valorFinal,
         dueDate: hoje, description: descricao,
         ...(split ? { split } : {}),
         ...(remoteIp ? { remoteIp } : {}),
@@ -103,7 +122,7 @@ Deno.serve(async (req) => {
     const cob = await (await fetch(`${ASAAS_URL}/payments`, {
       method: "POST", headers: h,
       body: JSON.stringify({
-        customer: customerId, billingType: "PIX", value: valor,
+        customer: customerId, billingType: "PIX", value: valorFinal,
         dueDate: hoje, description: descricao,
         ...(split ? { split } : {}),
       }),

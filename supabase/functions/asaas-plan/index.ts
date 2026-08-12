@@ -14,13 +14,42 @@ const json = (obj: unknown, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
 const ADMIN_EMAIL = "maycontuliofs@gmail.com";
-// e-mail de quem chamou, extraído do JWT do Supabase (não confiável = vazio)
-function callerEmail(req: Request): string {
+
+// Identidade do chamador com o JWT VERIFICADO pelo Auth do Supabase.
+// (Antes: atob() decodificava sem checar a assinatura -> qualquer um forjava
+//  { email: admin }. Agora o /auth/v1/user valida assinatura e expiração.)
+async function verifiedCaller(req: Request): Promise<{ id: string; email: string } | null> {
   try {
-    const tok = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
-    const payload = JSON.parse(atob(tok.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
-    return String(payload.email || "").toLowerCase();
-  } catch { return ""; }
+    const token = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+    if (!token) return null;
+    const su = Deno.env.get("SUPABASE_URL")!;
+    const apikey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const r = await fetch(`${su}/auth/v1/user`, { headers: { Authorization: `Bearer ${token}`, apikey } });
+    if (!r.ok) return null;
+    const u = await r.json();
+    return u && u.id ? { id: u.id, email: String(u.email || "").toLowerCase() } : null;
+  } catch { return null; }
+}
+
+// O chamador é dono desta loja? (checado no banco, nunca por id do front)
+async function ownsShop(shopId: string, callerId: string): Promise<boolean> {
+  try {
+    const su = Deno.env.get("SUPABASE_URL")!;
+    const sk = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const rows = await (await fetch(`${su}/rest/v1/shops?id=eq.${shopId}&select=owner_id`, {
+      headers: { apikey: sk, Authorization: `Bearer ${sk}` },
+    })).json();
+    return !!rows[0] && rows[0].owner_id === callerId;
+  } catch { return false; }
+}
+async function setPlano(shopId: string, planoId: string | null): Promise<void> {
+  const su = Deno.env.get("SUPABASE_URL")!;
+  const sk = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  await fetch(`${su}/rest/v1/shops?id=eq.${shopId}`, {
+    method: "PATCH",
+    headers: { apikey: sk, Authorization: `Bearer ${sk}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ plano_id: planoId }),
+  });
 }
 
 Deno.serve(async (req) => {
@@ -50,7 +79,8 @@ Deno.serve(async (req) => {
 
     // cria a subconta Asaas de uma barbearia (split de pagamentos) — só admin
     if (body.action === "subconta") {
-      if (callerEmail(req) !== ADMIN_EMAIL) return json({ error: "acesso restrito" }, 403);
+      const caller = await verifiedCaller(req);
+      if (!caller || caller.email !== ADMIN_EMAIL) return json({ error: "acesso restrito" }, 403);
       const su = Deno.env.get("SUPABASE_URL")!;
       const sk = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
       const sbH = { apikey: sk, Authorization: `Bearer ${sk}`, "Content-Type": "application/json" };
@@ -80,7 +110,8 @@ Deno.serve(async (req) => {
 
     // visão administrativa: pagamentos e assinaturas de toda a plataforma
     if (body.action === "admin-overview") {
-      if (callerEmail(req) !== ADMIN_EMAIL) return json({ error: "acesso restrito" }, 403);
+      const caller = await verifiedCaller(req);
+      if (!caller || caller.email !== ADMIN_EMAIL) return json({ error: "acesso restrito" }, 403);
       const [pays, subs] = await Promise.all([
         fetch(`${ASAAS_URL}/payments?limit=100&offset=0`, { headers: h }).then((r) => r.json()),
         fetch(`${ASAAS_URL}/subscriptions?limit=100&offset=0`, { headers: h }).then((r) => r.json()),
@@ -102,11 +133,23 @@ Deno.serve(async (req) => {
     }
 
     if (body.action === "cancel") {
+      // só o dono da loja (ou admin) cancela o plano DELA — e o plano_id é zerado aqui
+      const caller = await verifiedCaller(req);
+      if (!caller) return json({ error: "não autenticado" }, 401);
+      const shopId = String(body.shopId || "");
+      if (caller.email !== ADMIN_EMAIL && !(await ownsShop(shopId, caller.id))) {
+        return json({ error: "acesso restrito" }, 403);
+      }
       const s = await (await fetch(`${ASAAS_URL}/subscriptions/${body.subscriptionId}`, { method: "DELETE", headers: h })).json();
+      if (shopId) await setPlano(shopId, null);
       return json({ deleted: !!s.deleted });
     }
 
-    // subscribe
+    // subscribe — só o dono da loja assina o plano DELA
+    const caller = await verifiedCaller(req);
+    if (!caller) return json({ error: "não autenticado" }, 401);
+    const shopId = String(body.shopId || "");
+    if (!shopId || !(await ownsShop(shopId, caller.id))) return json({ error: "acesso restrito" }, 403);
     const { nome, email, cpfCnpj, phone, postalCode, addressNumber, card } = body;
     const doc = String(cpfCnpj || "").replace(/\D/g, "");
     const fone = String(phone || "").replace(/\D/g, "");
@@ -149,6 +192,8 @@ Deno.serve(async (req) => {
       }),
     })).json();
     if (!sub.id) throw new Error(JSON.stringify(sub.errors || sub));
+    // grava o plano na loja com service role (o dono não pode escrever plano_id direto)
+    await setPlano(shopId, sub.id);
     return json({ subscriptionId: sub.id, status: sub.status });
   } catch (e) {
     return json({ error: String(e) }, 500);

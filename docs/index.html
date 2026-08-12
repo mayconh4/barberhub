@@ -1017,7 +1017,10 @@ function confirmarPagamento(){
     shop_id: (S.shop && String(S.shop.id).length>20) ? S.shop.id : null,
     barbearia: S.shop ? S.shop.nome : "", barbeiro: S.barber==="any" ? "" : (((barbers.find(x=>x.id===S.barber)||{}).nome)||""),
     cliente_nome: nomeCli, cliente_zap: zapKey(S.payer && S.payer.zap),
-    servico: S.service.nome, preco: pvPay.final, dia: S.dia, minuto: S.time, status: "pago"
+    servico: S.service.nome, preco: pvPay.final, dia: S.dia, minuto: S.time, status: "pago",
+    // dados p/ o servidor validar (preço recalculado + status "pago" só com pagamento confirmado)
+    serviceIds: svcIds(), descPct: pvPay.pct||0,
+    paymentId: (S.pixData && S.pixData.paymentId) || S.lastPaymentId || null
   });
   S.shopAgenda = undefined;   // recarrega a agenda da barbearia (o horário recém-reservado passa a bloquear)
   // o desconto vale para um corte: consumido após o pagamento
@@ -1068,7 +1071,8 @@ function lerPagador(){
 async function chargeCard(extra){
   const pv=precoCliente();
   const base={ formaPagamento:"CREDIT_CARD", valor:pv.final, nome:S.payer.nome, cpf:S.payer.cpf, whatsapp:S.payer.zap,
-    email:S.payer.email||"", shopId:S.shop&&S.shop.id, descricao:S.service.nome + (pv.pct?` (desconto ${pv.pct}%)`:"") };
+    email:S.payer.email||"", shopId:S.shop&&S.shop.id, serviceIds:svcIds(), descPct:pv.pct||0,
+    descricao:S.service.nome + (pv.pct?` (desconto ${pv.pct}%)`:"") };
   try{
     const r = await fetch(FN_PIX, { method:"POST",
       headers:{ "Content-Type":"application/json", "apikey": SB_KEY, "Authorization":"Bearer "+SB_KEY },
@@ -1120,6 +1124,7 @@ async function payCard(){
     const tok = d.creditCardToken || (d.creditCard && d.creditCard.creditCardToken);
     if(tok) saveCardRec(S.payer.zap, { token:tok, last4:num.slice(-4), brand:d.brand||(d.creditCard&&d.creditCard.creditCardBrand)||cardBrand(num), holder:S.payer.nome });
   }
+  S.lastPaymentId = (res.data && res.data.paymentId) || null;   // p/ o servidor validar o status
   confirmarPagamento();
 }
 // pagar com um cartão já salvo (usa o token da Asaas, sem redigitar o cartão)
@@ -1132,6 +1137,7 @@ async function payWithToken(idx){
   const res = await chargeCard({ creditCardToken: c.token });
   if(res.declined){ payErro(btn, "Pagamento não aprovado: "+res.declined+". Tente outro cartão.", "Pagar"); return; }
   if(res.pending || res.fail){ payErro(btn, CARD_PEND, "Pagar"); return; }
+  S.lastPaymentId = (res.data && res.data.paymentId) || null;   // p/ o servidor validar o status
   confirmarPagamento();
 }
 // pop-up "Compra segura" — abre só ao clicar no (?)
@@ -1712,8 +1718,17 @@ async function salvarAgendamento(ag){
   try{ const l=meusAgLocais(); l.push(ag); localStorage.setItem("sb_meus_ag", JSON.stringify(l.slice(-50))); }catch(e){}
   try{ if(ag.cliente_zap) localStorage.setItem("sb_cliente_zap", ag.cliente_zap); }catch(e){}
   try{ if(S.payer) setClientePerfil(S.payer); }catch(e){}
-  try{ const r = await sb.from("appointments").insert(ag); if(r.error) console.log("agendamento (nuvem) erro:", r.error); }
-  catch(e){ console.log("agendamento (nuvem) excecao:", e); }
+  // Cliente é anônimo: o insert direto é bloqueado pela RLS. A Edge Function "agendar"
+  // grava com service role, RECALCULA o preço pelo catálogo e valida o status "pago".
+  try{
+    const rf = await callFn(FN_AGENDAR, {
+      shopId: ag.shop_id || null, barbearia: ag.barbearia, barbeiro: ag.barbeiro,
+      cliente_nome: ag.cliente_nome, cliente_zap: ag.cliente_zap,
+      dia: ag.dia, minuto: ag.minuto, serviceIds: ag.serviceIds||[], descPct: ag.descPct||0,
+      paymentId: ag.paymentId||null
+    });
+    if(!rf.ok || (rf.data && rf.data.error)) console.log("agendamento (nuvem) erro:", rf.data && rf.data.error);
+  }catch(e){ console.log("agendamento (nuvem) excecao:", e); }
 }
 // duração de um agendamento (soma serviços combinados "A + B"); usada para bloquear horários
 function apptDur(nome){
@@ -1727,10 +1742,17 @@ async function loadShopAgenda(shop){
   const nome = shop.nome, id = shop.id, uuid = String(id||"").length>=20;
   let cloud=[];
   try{
-    let q = sb.from("appointments").select("*");
-    q = uuid ? q.eq("shop_id", id) : q.eq("barbearia", nome);
-    const { data, error } = await q;
-    if(!error && data) cloud = data;
+    if(S.role==="client"){
+      // CLIENTE: só horários ocupados (sem PII), via RPC busy_slots — não lê agenda alheia
+      const { data, error } = await sb.rpc("busy_slots", { p_shop: uuid?id:null, p_barbearia: nome, p_dia: null });
+      if(!error && data) cloud = data.map(function(r){ return { dia:r.dia, minuto:r.minuto, barbeiro:r.barbeiro, servico:r.servico, status:"pago" }; });
+    } else {
+      // DONO/BARBEIRO: agenda completa da própria loja (a RLS garante que é só a dele)
+      let q = sb.from("appointments").select("*");
+      q = uuid ? q.eq("shop_id", id) : q.eq("barbearia", nome);
+      const { data, error } = await q;
+      if(!error && data) cloud = data;
+    }
   }catch(e){}
   const locais = meusAgLocais().filter(function(a){ return uuid ? a.shop_id===id : a.barbearia===nome; });
   const seen={}, all=[];
@@ -1755,7 +1777,7 @@ async function abrirAgendaBarbeiro(b){
   let shop=null;
   try{
     const { data: links } = await sb.from("barber_shops").select("shop_id").eq("barber_id", b.id);
-    if(links && links.length){ const { data: shops } = await sb.from("shops").select("*").eq("id", links[0].shop_id); if(shops && shops.length) shop=shops[0]; }
+    if(links && links.length){ const { data: shops } = await sb.from("shops_public").select("*").eq("id", links[0].shop_id); if(shops && shops.length) shop=shops[0]; }
   }catch(e){}
   S.barberSelfShop = shop;
   if(shop){ S.shopAgenda=undefined; loadShopAgenda(shop); } else { S.shopAgenda=[]; render(); }
@@ -1806,7 +1828,7 @@ async function buscarMeusAg(zap){
   try{ localStorage.setItem("sb_cliente_zap", key); }catch(e){}
   S.agList = null; render();
   let remotos = [];
-  try{ const { data, error } = await sb.from("appointments").select("*").eq("cliente_zap", key); if(!error && data) remotos = data; }catch(e){}
+  try{ const rf = await callFn(FN_MEUSAG, { cliente_zap:key }); if(rf.ok && rf.data && rf.data.appointments) remotos = rf.data.appointments; }catch(e){}
   const locais = meusAgLocais().filter(function(a){ return zapKey(a.cliente_zap)===key; });
   const chave = function(a){ return (a.dia||"")+"|"+a.minuto+"|"+(a.servico||""); };
   const vistos = {}, tudo = [];
@@ -2225,14 +2247,12 @@ async function planSubscribe(){
   if(!nome||num.length<13||!mm||!aa||cvv.length<3){ planMsg('<span style="color:var(--cancel)">Confira os dados do cartão.</span>'); return; }
   planMsg('<span class="spin" style="vertical-align:middle"></span> Ativando plano…');
   try{
-    const r = await fetch(FN_PLAN, { method:"POST",
-      headers:{ "Content-Type":"application/json", "apikey": SB_KEY, "Authorization":"Bearer "+SB_KEY },
-      body: JSON.stringify({ action:"subscribe", nome, email: sp.email||S.authEmail, cpfCnpj: sp.cpf_cnpj,
-        phone: sp.telefone, postalCode: sp.cep, addressNumber: sp.numero,
-        card:{ holderName:nome, number:num, expiryMonth:mm, expiryYear:(aa.length===2?"20"+aa:aa), ccv:cvv } }) });
-    const d = await r.json();
+    // envia o JWT do dono; a Edge Function confere a posse da loja e grava plano_id (service role)
+    const rf = await callFn(FN_PLAN, { action:"subscribe", shopId: sp.id, nome, email: sp.email||S.authEmail, cpfCnpj: sp.cpf_cnpj,
+      phone: sp.telefone, postalCode: sp.cep, addressNumber: sp.numero,
+      card:{ holderName:nome, number:num, expiryMonth:mm, expiryYear:(aa.length===2?"20"+aa:aa), ccv:cvv } }, true);
+    const d = rf.data||{};
     if(d && d.subscriptionId){
-      try{ await sb.from("shops").update({ plano_id:d.subscriptionId }).eq("id", sp.id); }catch(e){}
       sp.plano_id = d.subscriptionId; S.planForm=false; render();
     } else planMsg('<span style="color:var(--cancel)">Não deu para ativar: '+esc((d&&d.error)||"erro")+'</span>');
   }catch(e){ planMsg('<span style="color:var(--cancel)">Falha de conexão. Tente de novo.</span>'); }
@@ -2241,10 +2261,8 @@ async function planCancel(){
   const sp = S.dashShop || (S.myShops&&S.myShops[0]); if(!sp||!sp.plano_id) return;
   planMsg('<span class="spin" style="vertical-align:middle"></span> Cancelando…');
   try{
-    await fetch(FN_PLAN, { method:"POST",
-      headers:{ "Content-Type":"application/json", "apikey": SB_KEY, "Authorization":"Bearer "+SB_KEY },
-      body: JSON.stringify({ action:"cancel", subscriptionId: sp.plano_id }) });
-    try{ await sb.from("shops").update({ plano_id:null }).eq("id", sp.id); }catch(e){}
+    // a Edge Function confere a posse e zera o plano_id (service role)
+    await callFn(FN_PLAN, { action:"cancel", subscriptionId: sp.plano_id, shopId: sp.id }, true);
     sp.plano_id=null; render();
   }catch(e){ planMsg('<span style="color:var(--cancel)">Falha ao cancelar. Tente de novo.</span>'); }
 }
@@ -2472,12 +2490,13 @@ async function admTrial(id, conceder){
   if(!isAdmin()) return;
   let ate=null;
   if(conceder){ const d=new Date(); d.setDate(d.getDate()+30); ate=d.toISOString().slice(0,10); }
-  let err=null;
-  try{ const r = await sb.from("shops").update({ trial_until: ate }).eq("id", id); err=r.error; }catch(e){ err=e; }
+  // trial_until é coluna de plataforma: só via Edge Function autenticada (JWT do admin)
+  const rf = await callFn(FN_BARBADMIN, { action:"set-trial", shopId:id, trial_until:ate }, true);
   await admLoad();
-  if(err) opFail("Não foi possível alterar o período de teste.", err);
+  if(!rf.ok || (rf.data && rf.data.error)) opFail("Não foi possível alterar o período de teste.", { message:(rf.data&&rf.data.error)||"erro" });
 }
-async function admToggle(id, ativo){ if(!isAdmin()) return; let err=null; try{ const r = await sb.from("shops").update({ ativo: !!ativo }).eq("id", id); err=r.error; }catch(e){ err=e; } await admLoad(); if(err) opFail("Não foi possível alterar o status da barbearia.", err); }
+// ativo é coluna de plataforma: aprovar (true) é só admin; a Edge Function garante isso
+async function admToggle(id, ativo){ if(!isAdmin()) return; const rf = await callFn(FN_BARBADMIN, { action:"set-active", shopId:id, ativo: !!ativo }, true); await admLoad(); if(!rf.ok || (rf.data && rf.data.error)) opFail("Não foi possível alterar o status da barbearia.", { message:(rf.data&&rf.data.error)||"erro" }); }
 async function admDelShop(id){
   if(!isAdmin()) return;
   const sp = (S.adminShops||[]).find(function(x){ return x.id===id; });
@@ -2679,9 +2698,19 @@ async function admBarbOpen(shopId, back){
   if(!sh) return;
   S.barbShop = sh;
   try{
-    const rB = await sb.from("barbers").select("*");
     const rL = await sb.from("barber_shops").select("*").eq("shop_id", shopId);
-    S.allBarbers = rB.data||[]; S.barbLinks = rL.data||[];
+    S.barbLinks = rL.data||[];
+    // catálogo público (id/nome/esp/foto) para a lista "outros barbeiros"
+    const rPub = await sb.from("barbers_public").select("*");
+    let all = rPub.data||[];
+    // linhas completas (com e-mail de login) só dos barbeiros DESTA loja — a RLS permite ao dono
+    const ids = (S.barbLinks||[]).map(function(l){ return l.barber_id; });
+    if(ids.length){
+      const rMine = await sb.from("barbers").select("*").in("id", ids);
+      const mine = rMine.data||[];
+      all = all.map(function(b){ const f=mine.find(function(m){ return m.id===b.id; }); return f?Object.assign({}, b, f):b; });
+    }
+    S.allBarbers = all;
   }catch(e){ S.allBarbers=S.allBarbers||[]; S.barbLinks=S.barbLinks||[]; }
   render();
 }
@@ -2748,20 +2777,16 @@ async function criarLoginBarbeiro(){
   if(pass.length<6){ barbErr("A senha precisa ter ao menos 6 caracteres."); if(pwEl)pwEl.focus(); return; }
   const btn=document.querySelector('[data-a="beLoginCreate"]'); if(btn){ btn.disabled=true; btn.style.opacity=".7"; btn.textContent="Criando login…"; }
   let err=null;
-  try{
-    // cliente TEMPORÁRIO e isolado: cria a conta sem tocar na sessão do admin
-    const tmp = window.supabase.createClient(SB_URL, SB_KEY, { auth:{ persistSession:false, autoRefreshToken:false, storageKey:"sb-newbarber" } });
-    const r = await tmp.auth.signUp({ email:email, password:pass });
-    if(r.error){ err=r.error; }
-    else {
-      const uid = r.data && r.data.user ? r.data.user.id : null;
-      setBarberEmailLocal(ed.barber.id, email);
-      ed.barber.email = email;
-      const bg=(S.allBarbers||[]).find(function(x){ return x.id===ed.barber.id; }); if(bg) bg.email=email;
-      try{ await sb.from("barbers").update({ email:email, user_id:uid }).eq("id", ed.barber.id); }catch(e){}
-    }
-    try{ if(tmp.auth.signOut) tmp.auth.signOut(); }catch(_){}
-  }catch(e){ err=e; }
+  // O login é criado SERVER-SIDE (Edge Function barbearia-admin): cria o usuário no Auth
+  // e grava barbers.email/user_id — colunas que o dono não pode escrever direto. A função
+  // confere, com o JWT do dono, que ele é dono da loja onde o barbeiro atua.
+  const rf = await callFn(FN_BARBADMIN, { action:"create-barber-login", barberId: ed.barber.id, email, password: pass }, true);
+  if(!rf.ok || (rf.data && rf.data.error)){ err={ message:(rf.data&&rf.data.error)||"erro" }; }
+  else {
+    setBarberEmailLocal(ed.barber.id, email);
+    ed.barber.email = email;
+    const bg=(S.allBarbers||[]).find(function(x){ return x.id===ed.barber.id; }); if(bg) bg.email=email;
+  }
   if(btn){ btn.disabled=false; btn.style.opacity="1"; }
   if(err){ barbErr(opFail("Não foi possível criar o login.", err)); return; }
   render();
@@ -2830,9 +2855,9 @@ function editExit(){
   render();
 }
 async function shopSetAtivo(id, ativo){
-  let err=null;
-  try{ const r = await sb.from("shops").update({ ativo: !!ativo }).eq("id", id); err=r.error; }catch(e){ err=e; }
-  if(err){ opFail("Não foi possível atualizar a situação da barbearia.", err); return; }
+  // ativo é coluna de plataforma: Edge Function decide (dono desativa a própria; reativar é admin)
+  const rf = await callFn(FN_BARBADMIN, { action:"set-active", shopId:id, ativo: !!ativo }, true);
+  if(!rf.ok || (rf.data && rf.data.error)){ opFail("Não foi possível atualizar a situação da barbearia.", { message:(rf.data&&rf.data.error)||"erro" }); return; }
   S.editShop=null;
   if(S.editBack==="dash"){ S.myShops=undefined; S.role="barber"; S.tab="conta"; render(); }
   else if(S.editBack==="account"){ S.myShops=undefined; S.role="account"; S.accStage="home"; render(); }
@@ -3202,9 +3227,9 @@ async function hydrate(){
   try{
     const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error("tempo esgotado, verifique sua conexao")), 12000));
     const [rShops,rSvcs,rBarbers,rLinks] = await Promise.race([Promise.all([
-      sb.from('shops').select('*').eq('ativo', true),
+      sb.from('shops_public').select('*'),
       sb.from('services').select('*'),
-      sb.from('barbers').select('*'),
+      sb.from('barbers_public').select('*'),
       sb.from('barber_shops').select('*'),
     ]), timeout]);
     const links = rLinks.data || [];
@@ -3231,12 +3256,29 @@ async function hydrate(){
 
 const FN_PIX = "https://xprofyturjjhzjjjvgca.supabase.co/functions/v1/swift-endpoint";
 const FN_PLAN = "https://xprofyturjjhzjjjvgca.supabase.co/functions/v1/asaas-plan";
+const FN_AGENDAR = SB_URL + "/functions/v1/agendar";
+const FN_MEUSAG = SB_URL + "/functions/v1/meus-agendamentos";
+const FN_BARBADMIN = SB_URL + "/functions/v1/barbearia-admin";
+// ids dos serviços escolhidos (para o servidor recalcular o preço, sem confiar no front)
+function svcIds(){ return (S.service && (S.service.ids || (S.service.id?[S.service.id]:[]))) || []; }
+// token do usuário logado (JWT) p/ Edge Functions que exigem identidade; anon key p/ as públicas
+async function authTok(){ try{ const {data}=await sb.auth.getSession(); return (data&&data.session&&data.session.access_token)||SB_KEY; }catch(e){ return SB_KEY; } }
+async function callFn(url, body, useUserJwt){
+  const tok = useUserJwt ? await authTok() : SB_KEY;
+  try{
+    const r = await fetch(url, { method:"POST",
+      headers:{ "Content-Type":"application/json", "apikey": SB_KEY, "Authorization":"Bearer "+tok },
+      body: JSON.stringify(body||{}) });
+    let d={}; try{ d = await r.json(); }catch(_){}
+    return { ok:r.ok, status:r.status, data:d };
+  }catch(e){ return { ok:false, status:0, data:{ error:String(e&&e.message||e) } }; }
+}
 async function createPixReal(){
   try{
     const r = await fetch(FN_PIX, {
       method:"POST",
       headers:{ "Content-Type":"application/json", "apikey": SB_KEY, "Authorization":"Bearer "+SB_KEY },
-      body: JSON.stringify((function(){ const pv=precoCliente(); return { valor:pv.final, nome:S.payer.nome, cpf:S.payer.cpf, whatsapp:S.payer.zap, shopId: S.shop && S.shop.id, descricao:S.service.nome + (pv.pct?` (desconto ${pv.pct}%)`:"") }; })())
+      body: JSON.stringify((function(){ const pv=precoCliente(); return { valor:pv.final, nome:S.payer.nome, cpf:S.payer.cpf, whatsapp:S.payer.zap, shopId: S.shop && S.shop.id, serviceIds:svcIds(), descPct:pv.pct||0, descricao:S.service.nome + (pv.pct?` (desconto ${pv.pct}%)`:"") }; })())
     });
     const d = await r.json();
     if(d && d.qrImage){ S.pixData = { qrImage:d.qrImage, copiaECola:d.copiaECola, paymentId:d.paymentId }; savePixPending(); startPixPoll(); }
