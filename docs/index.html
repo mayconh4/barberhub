@@ -1528,6 +1528,28 @@ function renderAccount(){
   if(st==="login") st="home";                        // login é a tela padrão
   if(st==="signup" && !S.acctType) st="signupType";  // sem perfil escolhido: volta a perguntar
   let h = `<div class="eyebrow">Minha conta</div>`;
+  // recuperação de senha — o link do e-mail cria uma sessão temporária; aqui a pessoa define a nova senha
+  if(stage==="recover"){
+    h += `<h1 class="bg">Criar nova senha</h1><div class="hint" style="margin-top:-6px;margin-bottom:12px">Defina a nova senha da sua conta${em?" ("+em+")":""}.</div><div id="accerr"></div>`;
+    h += field("accNew","Nova senha",{type:"password",ph:"Mínimo 6 caracteres",val:""});
+    h += field("accNew2","Confirmar nova senha",{type:"password",ph:"Repita a senha",val:""});
+    h += `<button class="btn" data-a="doResetSave">Salvar nova senha</button>`;
+    main.innerHTML = h; return;
+  }
+  // esqueci minha senha — pede o e-mail e envia o link de recuperação
+  if(stage==="forgot"){
+    h += `<h1 class="bg">Esqueci minha senha</h1>`;
+    if(S.resetSent){
+      h += `<div class="ok" style="margin-top:6px"><b>Link enviado!</b><p>Enviamos um e-mail para <b>${S.resetSent}</b> com o link para criar uma nova senha. Confira também a caixa de spam.</p></div>`;
+      h += `<button class="btn out" data-a="accLogin" style="margin-top:12px">Voltar ao login</button>`;
+    } else {
+      h += `<div class="hint" style="margin-top:-6px;margin-bottom:12px">Informe seu e-mail. Enviaremos um link para criar uma nova senha.</div><div id="accerr"></div>`;
+      h += field("accEmail","E-mail",{type:"email",ph:"seu@email.com",val:S.loginEmail||""});
+      h += `<button class="btn" data-a="doResetSend">Enviar link</button>`;
+      h += `<div class="hint" style="text-align:center;margin-top:12px"><b data-a="accLogin" style="color:#A6791E;cursor:pointer">Voltar ao login</b></div>`;
+    }
+    main.innerHTML = h; return;
+  }
   if(em){
     const freela = isFreela() && !(S.myShops && S.myShops.length);
     h += `<h1 class="bg">Sua conta</h1><div class="lr"><span class="c">Logado como</span><b>${em}</b></div>`;
@@ -1579,7 +1601,8 @@ function renderAccount(){
     h += field("accEmail","E-mail",{type:"email",ph:"seu@email.com",val:S.loginEmail||""});
     h += field("accPass","Senha",{type:"password",ph:"Sua senha",val:""});
     h += `<button class="btn" data-a="doLogin">Entrar</button>`;
-    h += `<div class="hint" style="text-align:center;margin-top:12px">Não tem conta? <b data-a="accSignup" style="color:#A6791E;cursor:pointer">Criar conta</b></div>`;
+    h += `<div class="hint" style="text-align:center;margin-top:10px"><b data-a="accForgot" style="color:#A6791E;cursor:pointer">Esqueci minha senha</b></div>`;
+    h += `<div class="hint" style="text-align:center;margin-top:8px">Não tem conta? <b data-a="accSignup" style="color:#A6791E;cursor:pointer">Criar conta</b></div>`;
   }
   main.innerHTML = h;
 }
@@ -1610,6 +1633,33 @@ async function doLogin(){
   S.loginPending=true;   // login explícito: pode redirecionar para "Minha conta"
   try{ const { error } = await sb.auth.signInWithPassword({ email, password:pass }); if(error){ S.loginPending=false; accErr(traduzErro(error.message)); } }
   catch(err){ S.loginPending=false; accErr("Erro ao entrar. Tente de novo."); }
+}
+// "Esqueci minha senha": envia o e-mail com o link de recuperação (cliente, barbeiro ou freelancer)
+async function doResetSend(){
+  const e=document.getElementById("accEmail"); const email=(e?e.value.trim().toLowerCase():"");
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ if(e)e.classList.add("err"); accErr("Informe um e-mail válido."); return; }
+  const btn=document.querySelector('[data-a="doResetSend"]'); if(btn){ btn.disabled=true; btn.style.opacity=".7"; btn.textContent="Enviando…"; }
+  try{
+    const redirectTo = location.origin + location.pathname;
+    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo:redirectTo });
+    if(error){ if(btn){ btn.disabled=false; btn.style.opacity="1"; btn.textContent="Enviar link"; } accErr(traduzErro(error.message)); return; }
+    S.loginEmail=email; S.resetSent=email; render();
+  }catch(err){ if(btn){ btn.disabled=false; btn.style.opacity="1"; btn.textContent="Enviar link"; } accErr("Falha de conexão. Tente de novo."); }
+}
+// Salva a nova senha (após clicar no link do e-mail, com a sessão de recuperação ativa)
+async function doResetSave(){
+  const p1=document.getElementById("accNew"), p2=document.getElementById("accNew2");
+  const s1=(p1?p1.value:""), s2=(p2?p2.value:"");
+  if(s1.length<6){ if(p1)p1.classList.add("err"); accErr("A senha precisa ter ao menos 6 caracteres."); return; }
+  if(s1!==s2){ if(p2)p2.classList.add("err"); accErr("As senhas não coincidem."); return; }
+  const btn=document.querySelector('[data-a="doResetSave"]'); if(btn){ btn.disabled=true; btn.style.opacity=".7"; btn.textContent="Salvando…"; }
+  try{
+    const { error } = await sb.auth.updateUser({ password:s1 });
+    if(error){ if(btn){ btn.disabled=false; btn.style.opacity="1"; btn.textContent="Salvar nova senha"; } accErr(traduzErro(error.message)); return; }
+    S.accStage="home"; S.resetSent=null;
+    try{ window.alert("Senha alterada com sucesso!"); }catch(_){}
+    routeByPerfil();   // já logado com a nova senha
+  }catch(err){ if(btn){ btn.disabled=false; btn.style.opacity="1"; btn.textContent="Salvar nova senha"; } accErr("Falha de conexão. Tente de novo."); }
 }
 async function doSignup(){
   const {email,pass,e,p}=accCreds();
@@ -2938,8 +2988,11 @@ main.addEventListener("click", e=>{
   else if(a==="agBuscar"){ const el=document.getElementById("agZap"); buscarMeusAg(el?el.value:""); return; }
   else if(a==="toMinhaConta"){ S.role="account"; S.accStage="home"; S.myShops=undefined; render(); return; }
   else if(a.startsWith("dash:")){ openDash(a.slice(5)); return; }
-  else if(a==="accLogin"){ S.acctType=null; S.accStage="home"; render(); return; }
+  else if(a==="accLogin"){ S.acctType=null; S.accStage="home"; S.resetSent=null; render(); return; }
   else if(a==="accSignup"){ S.acctType=null; S.accStage="signupType"; render(); return; }
+  else if(a==="accForgot"){ const e=document.getElementById("accEmail"); if(e) S.loginEmail=e.value.trim().toLowerCase(); S.acctType=null; S.accStage="forgot"; S.resetSent=null; render(); return; }
+  else if(a==="doResetSend"){ doResetSend(); return; }
+  else if(a==="doResetSave"){ doResetSave(); return; }
   else if(a==="accHome"){ S.accStage="home"; render(); return; }
   else if(a==="doLogin"){ doLogin(); return; }
   else if(a==="doSignup"){ doSignup(); return; }
@@ -3111,7 +3164,10 @@ tabbar.addEventListener("click", e=>{ const t=e.target.closest(".tab"); if(!t)re
 const SB_URL="https://xprofyturjjhzjjjvgca.supabase.co";
 const SB_KEY="sb_publishable_y1y1j1gapNqt-7w5IMmyYg_M_Usm-7j";
 let sb=null; try{ sb = window.supabase.createClient(SB_URL, SB_KEY); }catch(e){}
-if(sb){ try{ refreshAuth(); sb.auth.onAuthStateChange(function(ev, session){ S.authEmail=(session&&session.user&&session.user.email)||""; S.myShops=undefined; S.myShopsPromise=null; if(ev==="SIGNED_IN" && S.loginPending){
+if(sb){ try{ refreshAuth(); sb.auth.onAuthStateChange(function(ev, session){ S.authEmail=(session&&session.user&&session.user.email)||""; S.myShops=undefined; S.myShopsPromise=null;
+  // link de "esqueci a senha": mostra a tela para definir a nova senha
+  if(ev==="PASSWORD_RECOVERY"){ toggleMenu(false); S.role="account"; S.accStage="recover"; S.loginPending=false; render(); return; }
+  if(ev==="SIGNED_IN" && S.loginPending){
   S.loginPending=false;
   // grava o perfil escolhido antes do login (se a conta ainda não tiver um)
   if(S.acctType && !getPtype()) setPtype(S.acctType);
