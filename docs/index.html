@@ -3275,15 +3275,27 @@ if(sb){ try{ refreshAuth(); sb.auth.onAuthStateChange(function(ev, session){ S.a
   S.acctType=null; S.afterAuth=null; S.signupNome="";
   routeByPerfil();
 } }); }catch(e){} }
+// lê a view pública; se ela ainda não existir (migração RLS ainda não aplicada),
+// cai para a tabela base — assim a home funciona antes e depois da migração.
+async function selShopsCompat(){
+  const r = await sb.from('shops_public').select('*');
+  if(r.error){ const b = await sb.from('shops').select('*').eq('ativo', true); if(!b.error) return b; }
+  return r;
+}
+async function selBarbersCompat(){
+  const r = await sb.from('barbers_public').select('*');
+  if(r.error){ const b = await sb.from('barbers').select('*'); if(!b.error) return b; }
+  return r;
+}
 async function hydrate(){
   if(!sb){ S.shopLoad="erro: sem conexao"; render(); return; }
   S.shopLoad="loading"; render();
   try{
     const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error("tempo esgotado, verifique sua conexao")), 12000));
     const [rShops,rSvcs,rBarbers,rLinks] = await Promise.race([Promise.all([
-      sb.from('shops_public').select('*'),
+      selShopsCompat(),
       sb.from('services').select('*'),
-      sb.from('barbers_public').select('*'),
+      selBarbersCompat(),
       sb.from('barber_shops').select('*'),
     ]), timeout]);
     const links = rLinks.data || [];
