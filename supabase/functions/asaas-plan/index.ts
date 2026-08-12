@@ -6,12 +6,17 @@ const ASAAS_URL = Deno.env.get("ASAAS_ENV") === "prod"
 const KEY = Deno.env.get("ASAAS_API_KEY")!;
 const PLAN_VALUE = 59.90;
 
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-const json = (obj: unknown, status = 200) =>
-  new Response(JSON.stringify(obj), { status, headers: { ...cors, "Content-Type": "application/json" } });
+const ALLOW = ["https://seubarba.app", "https://www.seubarba.app", "https://mayconh4.github.io", "http://localhost:8123"];
+function corsFor(req: Request) {
+  const origin = req.headers.get("origin") || "";
+  return {
+    "Access-Control-Allow-Origin": ALLOW.includes(origin) ? origin : ALLOW[0],
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Vary": "Origin",
+  };
+}
+const MAX_BODY = 16 * 1024;
 
 const ADMIN_EMAIL = "maycontuliofs@gmail.com";
 
@@ -53,9 +58,15 @@ async function setPlano(shopId: string, planoId: string | null): Promise<void> {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  const CO = corsFor(req);
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CO });
+  const json = (obj: unknown, status = 200) => new Response(JSON.stringify(obj), { status, headers: { ...CO, "Content-Type": "application/json" } });
   try {
-    const body = await req.json();
+    if (Number(req.headers.get("content-length") || "0") > MAX_BODY) return json({ error: "requisição muito grande" }, 413);
+    const _txt = await req.text();
+    if (_txt.length > MAX_BODY) return json({ error: "requisição muito grande" }, 413);
+    let body: any = {};
+    try { body = JSON.parse(_txt || "{}"); } catch { return json({ error: "json inválido" }, 400); }
     const h = { "Content-Type": "application/json", access_token: KEY };
 
     // resolve link curto do Google Maps (maps.app.goo.gl) até a URL completa com coordenadas
@@ -101,7 +112,7 @@ Deno.serve(async (req) => {
         }),
       })).json();
       const walletId = conta.walletId || (conta.wallets && conta.wallets[0] && conta.wallets[0].id);
-      if (!walletId) return json({ error: JSON.stringify(conta.errors || conta) }, 500);
+      if (!walletId) { console.error("asaas subconta:", JSON.stringify(conta.errors || conta)); return json({ error: "não foi possível criar a subconta" }, 502); }
       await fetch(`${su}/rest/v1/shops?id=eq.${body.shopId}`, {
         method: "PATCH", headers: sbH, body: JSON.stringify({ asaas_wallet: walletId }),
       });
@@ -128,7 +139,17 @@ Deno.serve(async (req) => {
     }
 
     if (body.action === "status") {
-      const s = await (await fetch(`${ASAAS_URL}/subscriptions/${body.subscriptionId}`, { headers: h })).json();
+      // só o dono da loja dessa assinatura (ou admin) consulta o status
+      const caller = await verifiedCaller(req);
+      if (!caller) return json({ error: "não autenticado" }, 401);
+      const subId = String(body.subscriptionId || "");
+      if (caller.email !== ADMIN_EMAIL) {
+        const su = Deno.env.get("SUPABASE_URL")!;
+        const sk = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        const rows = await (await fetch(`${su}/rest/v1/shops?plano_id=eq.${encodeURIComponent(subId)}&select=owner_id`, { headers: { apikey: sk, Authorization: `Bearer ${sk}` } })).json();
+        if (!(Array.isArray(rows) && rows.some((r: { owner_id?: string }) => r.owner_id === caller.id))) return json({ error: "acesso restrito" }, 403);
+      }
+      const s = await (await fetch(`${ASAAS_URL}/subscriptions/${encodeURIComponent(subId)}`, { headers: h })).json();
       return json({ status: s.status || "UNKNOWN", deleted: !!s.deleted });
     }
 
@@ -162,7 +183,7 @@ Deno.serve(async (req) => {
         method: "POST", headers: h,
         body: JSON.stringify({ name: nome, cpfCnpj: doc, email, ...(fone ? { mobilePhone: fone } : {}) }),
       })).json();
-      if (!novo.id) throw new Error(JSON.stringify(novo.errors || novo));
+      if (!novo.id) { console.error("asaas cust:", JSON.stringify(novo.errors || novo)); return json({ error: "não foi possível criar o cliente" }, 502); }
       customerId = novo.id;
     }
 
@@ -191,11 +212,12 @@ Deno.serve(async (req) => {
         },
       }),
     })).json();
-    if (!sub.id) throw new Error(JSON.stringify(sub.errors || sub));
+    if (!sub.id) { console.error("asaas sub:", JSON.stringify(sub.errors || sub)); return json({ error: "não foi possível ativar o plano" }, 502); }
     // grava o plano na loja com service role (o dono não pode escrever plano_id direto)
     await setPlano(shopId, sub.id);
     return json({ subscriptionId: sub.id, status: sub.status });
   } catch (e) {
-    return json({ error: String(e) }, 500);
+    console.error("asaas-plan:", e);
+    return json({ error: "erro interno" }, 500);
   }
 });

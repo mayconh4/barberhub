@@ -14,20 +14,30 @@
 // ---------------------------------------------------------------------
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-const json = (o: unknown, status = 200) =>
-  new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json" } });
-
+const ALLOW = ["https://seubarba.app", "https://www.seubarba.app", "https://mayconh4.github.io", "http://localhost:8123"];
+function corsFor(req: Request) {
+  const origin = req.headers.get("origin") || "";
+  return {
+    "Access-Control-Allow-Origin": ALLOW.includes(origin) ? origin : ALLOW[0],
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Vary": "Origin",
+  };
+}
+const MAX_BODY = 16 * 1024;
 const ASAAS_URL = "https://api.asaas.com/v3";
 const ASAAS_KEY = Deno.env.get("ASAAS_API_KEY") || "";
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  const CO = corsFor(req);
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CO });
+  const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { ...CO, "Content-Type": "application/json" } });
   try {
-    const b = await req.json();
+    if (Number(req.headers.get("content-length") || "0") > MAX_BODY) return json({ error: "requisição muito grande" }, 413);
+    const txt = await req.text();
+    if (txt.length > MAX_BODY) return json({ error: "requisição muito grande" }, 413);
+    let b: any = {};
+    try { b = JSON.parse(txt || "{}"); } catch { return json({ error: "json inválido" }, 400); }
     const shopId: string | null = b.shopId || null;
     const barbearia: string = String(b.barbearia || "").slice(0, 120);
     const barbeiro: string = String(b.barbeiro || "").slice(0, 120);
@@ -89,14 +99,27 @@ Deno.serve(async (req) => {
       } catch (_) { /* sem confirmação => segue aguardando */ }
     }
 
-    // 4) Insere com service role (RLS bloqueia o cliente de inserir direto).
+    // 4) IDEMPOTÊNCIA: mesma reserva (loja+telefone+dia+minuto) não duplica o registro
+    if (shopId) {
+      const { data: existing } = await db.from("appointments").select("id,status")
+        .eq("shop_id", shopId).eq("cliente_zap", clienteZap).eq("dia", dia).eq("minuto", minuto).limit(1);
+      if (Array.isArray(existing) && existing.length) {
+        // se já existe e agora foi confirmado o pagamento, promove para "pago"
+        if (status === "pago" && existing[0].status !== "pago") {
+          try { await db.from("appointments").update({ status: "pago" }).eq("id", existing[0].id); } catch (_) { /* ignora */ }
+        }
+        return json({ ok: true, id: existing[0].id, preco, status, duplicate: true });
+      }
+    }
+
+    // 5) Insere com service role (RLS bloqueia o cliente de inserir direto).
     const row = {
       shop_id: shopId, barbearia: nomeBarbearia, barbeiro,
       cliente_nome: clienteNome, cliente_zap: clienteZap,
       servico: nomeServico, preco, dia, minuto, status,
     };
     const { data, error } = await db.from("appointments").insert(row).select("id").single();
-    if (error) return json({ error: "não foi possível agendar" }, 500);
+    if (error) { console.error("agendar insert:", error.message); return json({ error: "não foi possível agendar" }, 500); }
 
     // desconto vale UMA vez: consome ao confirmar o pagamento
     if (status === "pago" && pct > 0 && shopId && clienteNome) {
@@ -108,6 +131,7 @@ Deno.serve(async (req) => {
 
     return json({ ok: true, id: data?.id, preco, status });
   } catch (e) {
-    return json({ error: String(e) }, 500);
+    console.error("agendar:", e);
+    return json({ error: "erro interno" }, 500);
   }
 });

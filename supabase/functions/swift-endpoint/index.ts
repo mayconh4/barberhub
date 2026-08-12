@@ -25,12 +25,17 @@ const COMMISSION = Number(Deno.env.get("PLATFORM_COMMISSION") || "5"); // % da p
 const MAX_VALUE = Number(Deno.env.get("MAX_CHARGE") || "100000");      // teto de segurança (R$)
 const RATE_MAX = Number(Deno.env.get("RATE_MAX") || "8");              // cobranças / 10 min / telefone
 
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-const json = (o: unknown, status = 200) =>
-  new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json" } });
+const ALLOW = ["https://seubarba.app", "https://www.seubarba.app", "https://mayconh4.github.io", "http://localhost:8123"];
+function corsFor(req: Request) {
+  const origin = req.headers.get("origin") || "";
+  return {
+    "Access-Control-Allow-Origin": ALLOW.includes(origin) ? origin : ALLOW[0],
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Vary": "Origin",
+  };
+}
+const MAX_BODY = 16 * 1024;
 
 const asaasH = { "Content-Type": "application/json", access_token: KEY };
 const sbH = { apikey: SB_SR, Authorization: `Bearer ${SB_SR}`, "Content-Type": "application/json" };
@@ -38,9 +43,15 @@ const isUuid = (x: unknown) => typeof x === "string" && /^[0-9a-fA-F-]{36}$/.tes
 const sb = (path: string, init?: RequestInit) => fetch(`${SB_URL}/rest/v1/${path}`, { ...init, headers: { ...sbH, ...(init?.headers || {}) } });
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  const CO = corsFor(req);
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CO });
+  const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { ...CO, "Content-Type": "application/json" } });
   try {
-    const b = await req.json();
+    if (Number(req.headers.get("content-length") || "0") > MAX_BODY) return json({ error: "requisição muito grande" }, 413);
+    const _txt = await req.text();
+    if (_txt.length > MAX_BODY) return json({ error: "requisição muito grande" }, 413);
+    let b: any = {};
+    try { b = JSON.parse(_txt || "{}"); } catch { return json({ error: "json inválido" }, 400); }
     const {
       nome, cpf, whatsapp, email, paymentId, shopId,
       formaPagamento, card, creditCardToken, holderInfo, serviceIds, dia, minuto,
@@ -175,7 +186,7 @@ Deno.serve(async (req) => {
         };
       }
       const pg = await (await fetch(`${ASAAS_URL}/payments`, { method: "POST", headers: asaasH, body: JSON.stringify(corpo) })).json();
-      if (!pg.id) { await marcarErro(idem); return json({ error: JSON.stringify(pg.errors || pg) }, 502); }
+      if (!pg.id) { console.error("asaas card:", JSON.stringify(pg.errors || pg)); await marcarErro(idem); return json({ error: "pagamento não autorizado" }, 502); }
       await sb(`payment_intents?idem_key=eq.${encodeURIComponent(idem)}`, { method: "PATCH", body: JSON.stringify({ asaas_payment_id: pg.id, status: pg.status }) });
       return json({
         paymentId: pg.id, status: pg.status,
@@ -189,12 +200,13 @@ Deno.serve(async (req) => {
       method: "POST", headers: asaasH,
       body: JSON.stringify({ customer: customerId, billingType: "PIX", value: valorFinal, dueDate: hoje, description: descricao, ...(split ? { split } : {}) }),
     })).json();
-    if (!cob.id) { await marcarErro(idem); return json({ error: JSON.stringify(cob.errors || cob) }, 502); }
+    if (!cob.id) { console.error("asaas pix:", JSON.stringify(cob.errors || cob)); await marcarErro(idem); return json({ error: "não foi possível gerar o PIX" }, 502); }
     await sb(`payment_intents?idem_key=eq.${encodeURIComponent(idem)}`, { method: "PATCH", body: JSON.stringify({ asaas_payment_id: cob.id, status: cob.status }) });
     const qr = await (await fetch(`${ASAAS_URL}/payments/${cob.id}/pixQrCode`, { headers: asaasH })).json();
     return json({ paymentId: cob.id, qrImage: qr.encodedImage, copiaECola: qr.payload });
   } catch (e) {
-    return json({ error: String(e) }, 500);
+    console.error("swift-endpoint:", e);
+    return json({ error: "erro interno" }, 500);
   }
 });
 

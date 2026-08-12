@@ -3,6 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Content-Security-Policy: a política mais restritiva compatível com o app.
+     Recursos reais usados: supabase-js via CDN jsdelivr (script), API do Supabase
+     (connect), imagens data:/blob:/https (avatares, foto, QR do PIX). O Asaas e os
+     mapas são chamados pelas Edge Functions (servidor), NUNCA pelo browser.
+     'unsafe-inline' em script/style é a única exceção — justificada: o app é um
+     único arquivo estático (GitHub Pages, sem build p/ nonce/hash) com o script e
+     handlers inline. NÃO há wildcard (*) em script-src. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://xprofyturjjhzjjjvgca.supabase.co; base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<!-- Anti-clickjacking: GitHub Pages não permite os headers frame-ancestors/X-Frame-Options,
+     então usamos um frame-buster. (Para o header real, sirva atrás de Cloudflare/Netlify.) -->
+<script>if (self !== top) { try { top.location.replace(self.location.href); } catch (e) { document.documentElement.style.display = "none"; } }</script>
 <title>SeuBarba</title>
 <style>
   :root{

@@ -18,16 +18,24 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const ADMIN_EMAIL = "maycontuliofs@gmail.com";
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-const json = (o: unknown, status = 200) =>
-  new Response(JSON.stringify(o), { status, headers: { ...cors, "Content-Type": "application/json" } });
+const ALLOW = ["https://seubarba.app", "https://www.seubarba.app", "https://mayconh4.github.io", "http://localhost:8123"];
+function corsFor(req: Request) {
+  const origin = req.headers.get("origin") || "";
+  return {
+    "Access-Control-Allow-Origin": ALLOW.includes(origin) ? origin : ALLOW[0],
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Vary": "Origin",
+  };
+}
+const MAX_BODY = 16 * 1024;
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  const CO = corsFor(req);
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CO });
+  const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { ...CO, "Content-Type": "application/json" } });
   try {
+    if (Number(req.headers.get("content-length") || "0") > MAX_BODY) return json({ error: "requisição muito grande" }, 413);
     const su = Deno.env.get("SUPABASE_URL")!;
     const sk = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const db = createClient(su, sk, { auth: { persistSession: false } });
@@ -40,7 +48,10 @@ Deno.serve(async (req) => {
     const callerEmail = String(caller.email || "").toLowerCase();
     const isAdmin = callerEmail === ADMIN_EMAIL;
 
-    const b = await req.json();
+    const txt = await req.text();
+    if (txt.length > MAX_BODY) return json({ error: "requisição muito grande" }, 413);
+    let b: any = {};
+    try { b = JSON.parse(txt || "{}"); } catch { return json({ error: "json inválido" }, 400); }
     const action = String(b.action || "");
 
     const ownsShop = async (shopId: string) => {
@@ -110,6 +121,7 @@ Deno.serve(async (req) => {
 
     return json({ error: "ação desconhecida" }, 400);
   } catch (e) {
-    return json({ error: String(e) }, 500);
+    console.error("barbearia-admin:", e);
+    return json({ error: "erro interno" }, 500);
   }
 });
