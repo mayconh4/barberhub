@@ -51,15 +51,23 @@ via `barber_shops`; `appointments →(shop_id) shops`, cliente ligado por `clien
 | **barbers** | admin, dono da loja do barbeiro, o próprio; público via `barbers_public` (sem e-mail/telefone) | logado | dono da loja (sem `email`/`user_id` — só Edge Function) | dono da loja / admin |
 | **barber_shops** | público (vínculos) | dono da loja | — | dono da loja / admin |
 | **appointments** | admin, dono da loja, barbeiro (só os dele) | **ninguém direto** → Edge Function `agendar` | ninguém direto | ninguém direto |
+| **client_discounts** | dono da loja / admin (o cliente só vê o próprio % via `discount_for`) | dono da loja / admin | dono da loja / admin | dono da loja / admin |
 
 Extras: view `shops_public`, view `barbers_public`, RPC `busy_slots()` (horários
-ocupados **sem PII**), funções `is_platform_admin()`, `owns_shop()`, `is_shop_barber()`,
-`my_barber_name()`.
+ocupados **sem PII**), RPC `discount_for()` (só o % do próprio cliente), funções
+`is_platform_admin()`, `owns_shop()`, `is_shop_barber()`, `my_barber_name()`.
+
+**Preço 100% no servidor:** os descontos por cliente saíram do localStorage do
+barbeiro e foram para a tabela `client_discounts` (gerida pelo dono via RLS). A
+cobrança (`swift-endpoint`) e o agendamento (`agendar`) **leem o desconto do banco
+e ignoram** qualquer percentual/valor mandado pelo cliente; o desconto é consumido
+(vale uma vez) após o pagamento confirmado.
 
 ## 4. Arquivos
 
 **Criados**
 - `supabase/migrations/20260812_rls_security.sql` — RLS, policies, grants por coluna, views, RPC, helpers.
+- `supabase/migrations/20260813_client_discounts.sql` — tabela `client_discounts` (RLS do dono) + RPC `discount_for()`.
 - `supabase/functions/agendar/index.ts` — agendamento anônimo seguro (recalcula preço; valida status na Asaas).
 - `supabase/functions/meus-agendamentos/index.ts` — cliente lê os próprios por telefone (service role).
 - `supabase/functions/barbearia-admin/index.ts` — login de barbeiro, aprovar/ativar, trial, wallet (JWT verificado).
@@ -75,7 +83,8 @@ ocupados **sem PII**), funções `is_platform_admin()`, `owns_shop()`, `is_shop_
 1. **Deploy das Edge Functions** (senão o app quebra ao aplicar a RLS):
    `supabase functions deploy agendar meus-agendamentos barbearia-admin asaas-plan swift-endpoint`
 2. Confirme os secrets: `ASAAS_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`.
-3. **Aplique a migration**: `supabase db push` (ou cole `20260812_rls_security.sql` no SQL Editor).
+3. **Aplique as migrations** na ordem: `supabase db push` (ou cole no SQL Editor
+   `20260812_rls_security.sql` e depois `20260813_client_discounts.sql`).
    Rode como `postgres` para as views bypassarem a RLS da base (é o padrão do SQL Editor / db push).
 4. **Deploy do frontend** (`docs/index.html`) junto — ele já usa os endpoints novos.
 5. Rode `supabase/tests/rls_matrix_test.sql` e confira que **não há "FAIL"**.
@@ -106,9 +115,9 @@ e "meus agendamentos" pela Edge Function — além da suíte de regressão compl
 - **Identidade do cliente é fraca** (telefone). `meus-agendamentos` já não permite
   varrer a tabela inteira, mas quem souber o número vê os agendamentos dele.
   Para robustez: código de verificação por WhatsApp/SMS.
-- **Desconto por cliente é local** (localStorage do barbeiro), então o servidor não
-  consegue validá-lo — o `descPct` é **limitado a 0–90%** no servidor. Para eliminar,
-  mover descontos para uma tabela no banco.
+- ~~Desconto por cliente era local (localStorage)~~ → **resolvido**: agora vive em
+  `client_discounts` e o preço é recalculado 100% no servidor. Resta que o desconto
+  usa o **nome** do cliente como chave (por loja); nomes iguais compartilham desconto.
 - **`ativo` só sobe por admin**: se hoje algum dono reativava a própria loja sozinho,
   agora precisa do admin (era esse o comportamento indicado na UI).
 - Um `barbers` órfão pode ser criado por qualquer logado (sem vínculo, sem poder);

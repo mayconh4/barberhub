@@ -558,27 +558,67 @@ let profissionais = [
 
 // desconto opcional no próximo corte, por cliente — persistido e aplicado
 // automaticamente no agendamento/PIX do cliente com o mesmo nome
-let descontos = (function(){ try{ return JSON.parse(localStorage.getItem("sb_descontos")||"{}"); }catch(e){ return {}; } })();
-function saveDescontos(){ try{ localStorage.setItem("sb_descontos", JSON.stringify(descontos)); }catch(e){} }
+// Descontos por cliente ficam no BANCO (tabela client_discounts). Aqui só mantemos:
+//  - descontos: mapa (nome normalizado -> %) da loja aberta no painel do DONO
+//  - S.descPct: o % do CLIENTE atual (via discount_for) só para exibir o preço.
+// A cobrança/agendamento SEMPRE recalculam o desconto no servidor (não confiam no front).
+let descontos = {};
+function dkey(n){ return String(n||"").trim().toLowerCase(); }
+// dono: carrega os descontos da própria loja para o painel
+async function loadDescontos(shopId){
+  descontos = {};
+  if(!shopId) return;
+  try{
+    const { data } = await sb.from("client_discounts").select("cliente_nome,pct").eq("shop_id", shopId);
+    (data||[]).forEach(function(r){ descontos[dkey(r.cliente_nome)] = +r.pct||0; });
+  }catch(e){}
+}
+// cliente: busca o próprio desconto (só o %) para exibir o preço
+async function fetchDiscount(shopId, nome){
+  let pct = 0;
+  try{ const { data } = await sb.rpc("discount_for", { p_shop: shopId, p_nome: nome }); pct = Math.max(0, Math.min(90, +data||0)); }catch(e){}
+  S.descKey = shopId + "|" + dkey(nome);
+  if((S.descPct||0) !== pct){ S.descPct = pct; if(S.role==="client") render(); } else { S.descPct = pct; }
+  return pct;
+}
+function ensureDiscount(){
+  if(!S.shop) return;
+  const nome = (S.payer && S.payer.nome) || getCName() || "";
+  const key = S.shop.id + "|" + dkey(nome);
+  if(S.descKey===key) return;      // já buscado para esta (loja, nome)
+  fetchDiscount(S.shop.id, nome);
+}
 // plano ok: assinatura ativa ou mês grátis (teste) ainda vigente
 function planoOk(x){
   if(x && (x.plano || x.plano_id)) return true;
   const t = x && (x.trial || x.trial_until);
   return !!(t && new Date(t+"T23:59:59") >= new Date());
 }
-function descDe(nome){
-  const alvo = String(nome||"").trim().toLowerCase(); if(!alvo) return 0;
-  const k = Object.keys(descontos).find(n=>n.trim().toLowerCase()===alvo);
-  return k ? (+descontos[k]||0) : 0;
+function descDe(nome){ return +descontos[dkey(nome)] || 0; }
+// dono grava/remove o desconto do cliente na PRÓPRIA loja (banco + mapa local)
+async function setDescCli(nome, v){
+  const p = Math.max(0, Math.min(90, +v||0));
+  const key = dkey(nome); const shopId = S.dashShop && S.dashShop.id;
+  if(p>0) descontos[key]=p; else delete descontos[key];
+  if(!shopId) return;
+  try{
+    if(p>0) await sb.from("client_discounts").upsert({ shop_id:shopId, cliente_nome:key, pct:p }, { onConflict:"shop_id,cliente_nome" });
+    else await sb.from("client_discounts").delete().eq("shop_id",shopId).eq("cliente_nome",key);
+  }catch(e){}
 }
-function setDescCli(nome, v){ const p=Math.max(0,Math.min(90,+v||0)); if(p>0) descontos[nome]=p; else delete descontos[nome]; saveDescontos(); }
+// liga/desliga o desconto do próximo corte (botão do painel)
+async function descTg(cliente){
+  const key = dkey(cliente); const shopId = S.dashShop && S.dashShop.id; if(!shopId) return;
+  if(descontos[key]!=null){ delete descontos[key]; try{ await sb.from("client_discounts").delete().eq("shop_id",shopId).eq("cliente_nome",key); }catch(e){} }
+  else { const p = noShowDiscount||10; descontos[key]=p; try{ await sb.from("client_discounts").upsert({ shop_id:shopId, cliente_nome:key, pct:p }, { onConflict:"shop_id,cliente_nome" }); }catch(e){} }
+  render();
+}
 // desconto por cliente: lê o nome do data-attribute (evita injeção via handler inline)
 document.addEventListener("input", function(e){ const el=e.target; if(!el||!el.dataset||el.dataset.descCli==null) return; setDescCli(el.dataset.descCli, el.value); });
-// preço do serviço para o cliente atual, já com o desconto vinculado ao nome
+// preço do serviço para o cliente atual (o % vem de discount_for; o servidor revalida na cobrança)
 function precoCliente(){
   const base = S.service ? S.service.preco : 0;
-  const nome = (S.payer && S.payer.nome) || getCName() || "";
-  const pct = descDe(nome);
+  const pct = S.descPct || 0;
   return { base, pct, final: Math.round(base*(1-pct/100)*100)/100 };
 }
 // freelancers da barbearia (dono define a comissão de cada um)
@@ -874,6 +914,7 @@ function renderClient(){
     }
   }
   if(S.step===4 && !S.pixGen){
+    ensureDiscount();   // busca o % do cliente no banco (discount_for) para exibir o preço
     const b = S.barber==="any"?"Qualquer barbeiro":barbers.find(x=>x.id===S.barber).nome;
     const perfil = getClientePerfil();
     const pd = S.payer||perfil||{}; const cd = S.card||{};
@@ -1024,7 +1065,7 @@ function confirmarPagamento(){
   });
   S.shopAgenda = undefined;   // recarrega a agenda da barbearia (o horário recém-reservado passa a bloquear)
   // o desconto vale para um corte: consumido após o pagamento
-  if(pvPay.pct){ const alvo=nomeCli.trim().toLowerCase(); Object.keys(descontos).forEach(n=>{ if(n.trim().toLowerCase()===alvo) delete descontos[n]; }); saveDescontos(); }
+  // o desconto vale uma vez e é CONSUMIDO no servidor (Edge Function "agendar") após o pagamento
   let c=(fidelidade[nomeCli]||0); c = (c%10===0 && c>0) ? 1 : c+1; fidelidade[nomeCli]=c;
   clearInterval(timerInt);
   const wa = waAgendamento();
@@ -1243,14 +1284,26 @@ function brDateToISO(v){
   return m ? m[3]+"-"+m[2]+"-"+m[1] : null;
 }
 // Máscara automática dd/mm/aaaa: insere as barras conforme os números são digitados
-// ao digitar o nome no pagamento, aplica na hora o desconto vinculado ao cliente
+// ao digitar o nome no pagamento, busca (com debounce) o desconto do cliente no banco
+let _descTimer=null;
 document.addEventListener("input", function(e){
-  if(!e.target || e.target.id!=="pgNome" || !S.service) return;
-  const pct = descDe(e.target.value), base = S.service.preco;
-  const el = document.getElementById("pgPreco"), msg = document.getElementById("pgDescMsg");
-  if(el) el.innerHTML = pct ? `<s style="color:var(--mut);font-weight:400">${fmt(base)}</s> ${fmt(Math.round(base*(1-pct/100)*100)/100)}` : fmt(base);
-  if(msg){ msg.style.display = pct ? "" : "none"; if(pct) msg.innerHTML = `🎉 Você tem <b>${pct}% de desconto</b> neste corte, cortesia da barbearia.`; }
+  if(!e.target || e.target.id!=="pgNome" || !S.service || !S.shop) return;
+  const nome=e.target.value, base=S.service.preco;
+  clearTimeout(_descTimer);
+  _descTimer=setTimeout(async function(){
+    const pct = await fetchDiscountQuiet(S.shop.id, nome);
+    const el = document.getElementById("pgPreco"), msg = document.getElementById("pgDescMsg");
+    if(el) el.innerHTML = pct ? `<s style="color:var(--mut);font-weight:400">${fmt(base)}</s> ${fmt(Math.round(base*(1-pct/100)*100)/100)}` : fmt(base);
+    if(msg){ msg.style.display = pct ? "" : "none"; if(pct) msg.innerHTML = `🎉 Você tem <b>${pct}% de desconto</b> neste corte, cortesia da barbearia.`; }
+  }, 400);
 });
+// igual ao fetchDiscount mas sem re-render (a atualização é feita nos elementos acima)
+async function fetchDiscountQuiet(shopId, nome){
+  let pct=0;
+  try{ const { data } = await sb.rpc("discount_for", { p_shop: shopId, p_nome: nome }); pct = Math.max(0, Math.min(90, +data||0)); }catch(e){}
+  S.descPct = pct; S.descKey = shopId + "|" + dkey(nome);
+  return pct;
+}
 document.addEventListener("input", function(e){
   if(!e.target || e.target.id!=="birthDate") return;
   const d = e.target.value.replace(/\D/g,"").slice(0,8);
@@ -2058,7 +2111,7 @@ function renderBarber(){
       const flbl = free ? `<span class="fidlbl free">${giftSm}Próximo grátis</span>` : `<span class="fidlbl">${filled}/10</span>`;
       const waMsg = encodeURIComponent(`Olá ${a.cliente}! Aqui é da ${profile?(profile.nomeFantasia||"barbearia"):"barbearia"} 💈 Sobre seu horário de ${hhmm(a.min)} hoje.`);
       const waBtn = a.zap? `<a class="wabtn" href="https://wa.me/55${a.zap}?text=${waMsg}" target="_blank" rel="noopener"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15l-1.3 4.7 4.8-1.3A10 10 0 1 0 12 2zm5.9 14.3c-.2.7-1.4 1.3-2 1.4-.5.1-1.2.1-1.9-.1-.4-.1-1-.3-1.7-.6-3-1.3-4.9-4.3-5-4.5-.2-.2-1.2-1.6-1.2-3s.7-2.1 1-2.4c.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 2c.1.1.1.3 0 .5l-.4.5-.3.3c-.2.2-.3.4-.2.6.2.4.8 1.3 1.6 2 .9.9 1.7 1.1 2 1.3.2.1.4.1.6-.1l.7-.9c.2-.2.4-.2.6-.1l1.9.9c.3.1.4.2.5.3.1.2.1.7-.1 1.3z"/></svg>WhatsApp</a>` : "";
-      const descPct = +descontos[a.cliente]||0;
+      const descPct = +descontos[dkey(a.cliente)]||0;
       const descBtn = descPct
         ? `<span class="slval" style="display:flex;align-items:center;gap:5px;font-size:13px">Desconto próx. corte
              <input type="number" min="0" max="90" step="5" value="${descPct}" data-desc-cli="${esc(a.cliente)}" style="width:58px;text-align:right">%
@@ -2598,6 +2651,7 @@ async function openDash(shopId){
   if(fotoStudio && !sp.foto){ try{ sb.from("shops").update({ foto:fotoStudio }).eq("id", sp.id).then(function(){}); sp.foto=fotoStudio; }catch(e){} }
   S.role="barber"; S.tab="dash";
   S.shopAgenda=undefined; loadShopAgenda(sp);   // agenda real desta barbearia
+  loadDescontos(sp.id).then(render);            // descontos por cliente desta loja (banco)
   render();
 }
 
@@ -3064,7 +3118,7 @@ main.addEventListener("click", e=>{
   else if(a==="planoEdit"){ S.planoEdit=true; render(); return; }
   else if(a==="planoSave"){ const i=document.getElementById("planoVal"); lsSet("sb_plano", i&&+i.value>0 ? String(+i.value) : ""); S.planoEdit=false; render(); return; }
   else if(a==="planoDel"){ lsSet("sb_plano", null); S.planoEdit=false; render(); return; }
-  else if(a.startsWith("descTg:")){ const c=a.slice(7); if(descontos[c]) delete descontos[c]; else descontos[c]=noShowDiscount||10; saveDescontos(); render(); return; }
+  else if(a.startsWith("descTg:")){ descTg(a.slice(7)); return; }
   else if(a.startsWith("fpsvc:")){ const key=a.slice(6); const fp=profile||loadFreela()||{}; if(!fp.svc) fp.svc={}; if(fp.svc[key]) delete fp.svc[key]; else { const c=CATALOGO.find(x=>x.key===key); if(c) fp.svc[key]={dur:c.dur}; } profile=fp; render(); return; }
   else if(a==="freelaPanel"){ if(!profile) profile=loadFreela(); S.role="barber"; S.tab="rede"; render(); return; }
   else if(a==="expandir"){ S.barberType="dono"; S.role="onboarding"; S.obStep=null; S.obDraft=null; render(); return; }

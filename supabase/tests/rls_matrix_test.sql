@@ -42,6 +42,11 @@ values
   ('aaaaaaaa-0000-0000-0000-000000000001', 'Loja A', 'Barbeiro A', 'Cliente A1', '31900000001', 'Corte A', 40, '2026-08-20', 600, 'pago'),
   ('bbbbbbbb-0000-0000-0000-000000000002', 'Loja B', 'Barbeiro B', 'Cliente B1', '31900000002', 'Corte B', 50, '2026-08-20', 660, 'pago');
 
+insert into public.client_discounts (shop_id, cliente_nome, pct)
+values
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'cliente a1', 10),
+  ('bbbbbbbb-0000-0000-0000-000000000002', 'cliente b1', 15);
+
 set local session_replication_role = origin;
 
 -- ---- Helpers ----
@@ -82,6 +87,9 @@ select pg_temp.chk('CLIENTE: busy_slots devolve horários (sem PII)',          t
 select pg_temp.chk('CLIENTE: NÃO cria appointment direto',                    false, pg_temp.wr($$insert into public.appointments(shop_id,barbearia,cliente_zap,servico,preco,dia,minuto,status) values ('aaaaaaaa-0000-0000-0000-000000000001','Loja A','31900000009','x',1,'2026-08-21',600,'pago')$$));
 select pg_temp.chk('CLIENTE: NÃO altera uma barbearia',                       false, pg_temp.wr($$update public.shops set nome='hack' where id='aaaaaaaa-0000-0000-0000-000000000001'$$));
 select pg_temp.chk('CLIENTE: NÃO altera preço de serviço',                    false, pg_temp.wr($$update public.services set preco=1 where id='cccccccc-0000-0000-0000-0000000000a1'$$));
+select pg_temp.chk('CLIENTE: NÃO lê a tabela client_discounts',               false, pg_temp.cnt('select 1 from public.client_discounts') >= 0);
+select pg_temp.chk('CLIENTE: vê o PRÓPRIO desconto via discount_for',         true,  pg_temp.cnt($$select 1 from (select public.discount_for('aaaaaaaa-0000-0000-0000-000000000001','Cliente A1') as p) t where p = 10$$) = 1);
+select pg_temp.chk('CLIENTE: NÃO cria/edita desconto',                        false, pg_temp.wr($$insert into public.client_discounts(shop_id,cliente_nome,pct) values ('aaaaaaaa-0000-0000-0000-000000000001','x',90)$$));
 
 -- =====================================================================
 -- DONO A (owner_id = 1111...)
@@ -100,6 +108,10 @@ select pg_temp.chk('DONO A: gerencia serviço da PRÓPRIA loja',                
 select pg_temp.chk('DONO A: NÃO mexe em serviço da loja B',                   false, pg_temp.wr($$update public.services set preco=1 where id='cccccccc-0000-0000-0000-0000000000b1'$$));
 select pg_temp.chk('DONO A: NÃO grava barbers.email (vínculo de login)',      false, pg_temp.wr($$update public.barbers set email='x@x' where id='dddddddd-0000-0000-0000-0000000000a1'$$));
 select pg_temp.chk('DONO A: NÃO adiciona barbeiro na loja B',                 false, pg_temp.wr($$insert into public.barber_shops(shop_id,barber_id) values ('bbbbbbbb-0000-0000-0000-000000000002','dddddddd-0000-0000-0000-0000000000a1')$$));
+select pg_temp.chk('DONO A: vê SÓ os descontos da própria loja (1)',          true,  pg_temp.cnt('select 1 from public.client_discounts') = 1);
+select pg_temp.chk('DONO A: NÃO vê descontos da loja B',                      true,  pg_temp.cnt($$select 1 from public.client_discounts where shop_id='bbbbbbbb-0000-0000-0000-000000000002'$$) = 0);
+select pg_temp.chk('DONO A: grava desconto na PRÓPRIA loja',                  true,  pg_temp.wr($$insert into public.client_discounts(shop_id,cliente_nome,pct) values ('aaaaaaaa-0000-0000-0000-000000000001','cliente novo',20)$$));
+select pg_temp.chk('DONO A: NÃO grava desconto na loja B',                    false, pg_temp.wr($$insert into public.client_discounts(shop_id,cliente_nome,pct) values ('bbbbbbbb-0000-0000-0000-000000000002','hack',90)$$));
 
 -- =====================================================================
 -- DONO B — não enxerga nada de A (simétrico)

@@ -11,7 +11,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
     const { valor, nome, cpf, whatsapp, email, descricao, paymentId, shopId,
-      formaPagamento, card, creditCardToken, holderInfo, serviceIds, descPct } = await req.json();
+      formaPagamento, card, creditCardToken, holderInfo, serviceIds } = await req.json();
     const h = { "Content-Type": "application/json", access_token: KEY };
     const ehCartao = formaPagamento === "CREDIT_CARD";
     // IP do cliente — a Asaas exige em cobranças no cartão
@@ -60,8 +60,8 @@ Deno.serve(async (req) => {
       } catch (_) { /* sem wallet: 100% fica na conta principal */ }
     }
 
-    // valor AUTORITATIVO: recalculado do catálogo da loja. NÃO confia no "valor"
-    // enviado pelo cliente (anti-adulteração de preço). Desconto limitado a 0..90%.
+    // valor AUTORITATIVO: preço do catálogo + desconto lido do BANCO. NÃO confia
+    // no "valor" nem no "descPct" enviados pelo cliente (anti-adulteração de preço).
     let valorFinal = Number(valor) || 0;
     const ids = (Array.isArray(serviceIds) ? serviceIds : [])
       .filter((x: unknown) => typeof x === "string" && /^[0-9a-fA-F-]{36}$/.test(x));
@@ -69,12 +69,20 @@ Deno.serve(async (req) => {
       try {
         const su = Deno.env.get("SUPABASE_URL")!;
         const sk = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        const sbH = { apikey: sk, Authorization: `Bearer ${sk}`, "Content-Type": "application/json" };
         const svcs = await (await fetch(
           `${su}/rest/v1/services?shop_id=eq.${shopId}&id=in.(${ids.join(",")})&select=preco`,
-          { headers: { apikey: sk, Authorization: `Bearer ${sk}` } },
+          { headers: sbH },
         )).json();
         const base = (svcs || []).reduce((t: number, s: { preco: number }) => t + Number(s.preco || 0), 0);
-        const pct = Math.max(0, Math.min(90, Number(descPct) || 0));
+        // desconto do cliente lido do banco (0 se não houver)
+        let pct = 0;
+        try {
+          const dr = await (await fetch(`${su}/rest/v1/rpc/discount_for`, {
+            method: "POST", headers: sbH, body: JSON.stringify({ p_shop: shopId, p_nome: nome }),
+          })).json();
+          pct = Math.max(0, Math.min(90, Number(dr) || 0));
+        } catch (_) { /* sem desconto */ }
         if (base > 0) valorFinal = Math.round(base * (1 - pct / 100) * 100) / 100;
       } catch (_) { /* mantém o valor recebido se a consulta falhar */ }
     }

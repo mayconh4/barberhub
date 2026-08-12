@@ -36,7 +36,6 @@ Deno.serve(async (req) => {
     const dia: string = String(b.dia || "").slice(0, 10);
     const minuto: number = Math.max(0, Math.min(1440, parseInt(b.minuto, 10) || 0));
     const serviceIds: string[] = Array.isArray(b.serviceIds) ? b.serviceIds.slice(0, 10) : [];
-    const descPct: number = Math.max(0, Math.min(90, Number(b.descPct) || 0));
     const paymentId: string | null = b.paymentId || null;
 
     if (!clienteZap) return json({ error: "WhatsApp obrigatório" }, 400);
@@ -60,7 +59,15 @@ Deno.serve(async (req) => {
     } else {
       return json({ error: "serviceIds obrigatório" }, 400);
     }
-    const preco = Math.round(base * (1 - descPct / 100) * 100) / 100;
+    // desconto AUTORITATIVO do banco (ignora qualquer percentual mandado pelo cliente)
+    let pct = 0;
+    if (shopId && clienteNome) {
+      try {
+        const { data } = await db.rpc("discount_for", { p_shop: shopId, p_nome: clienteNome });
+        pct = Math.max(0, Math.min(90, Number(data) || 0));
+      } catch (_) { /* sem desconto */ }
+    }
+    const preco = Math.round(base * (1 - pct / 100) * 100) / 100;
 
     // 2) Nome da barbearia a partir do banco (não confia no que o front mandou).
     let nomeBarbearia = barbearia;
@@ -89,6 +96,14 @@ Deno.serve(async (req) => {
     };
     const { data, error } = await db.from("appointments").insert(row).select("id").single();
     if (error) return json({ error: "não foi possível agendar" }, 500);
+
+    // desconto vale UMA vez: consome ao confirmar o pagamento
+    if (status === "pago" && pct > 0 && shopId && clienteNome) {
+      try {
+        await db.from("client_discounts").delete()
+          .eq("shop_id", shopId).eq("cliente_nome", clienteNome.trim().toLowerCase());
+      } catch (_) { /* ignora */ }
+    }
 
     return json({ ok: true, id: data?.id, preco, status });
   } catch (e) {
