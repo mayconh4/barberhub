@@ -381,7 +381,7 @@ function avatarKey(scope){ return "sb_avatar_"+scope+"_"+(S.authEmail||"").toLow
 function getAvatar(scope){ try{ return localStorage.getItem(avatarKey(scope))||""; }catch(e){ return ""; } }
 function avatarHtml(scope, name, size){
   size = size||64;
-  const src = getAvatar(scope);
+  const src = safeImg(getAvatar(scope));
   if(src) return `<img src="${src}" alt="" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;flex:none">`;
   return `<div class="av" style="width:${size}px;height:${size}px;font-size:${Math.round(size/2.6)}px;display:flex;align-items:center;justify-content:center;flex:none">${ini(name||"?")}</div>`;
 }
@@ -394,7 +394,7 @@ function setShopFoto(id, data){ try{ localStorage.setItem("sb_shopfoto_"+id, dat
 // foto de cada barbeiro, por id (o cliente vê na escolha do barbeiro)
 function getBarberFoto(id){ try{ return localStorage.getItem("sb_barberfoto_"+id)||""; }catch(e){ return ""; } }
 function setBarberFoto(id, data){ try{ localStorage.setItem("sb_barberfoto_"+id, data); }catch(e){} }
-function barberAvatarHtml(b, size){ size=size||44; const f=(b&&b.foto)||getBarberFoto(b&&b.id); if(f) return `<img src="${f}" alt="" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;flex:none">`; return `<div class="av" style="width:${size}px;height:${size}px;flex:none">${ini((b&&b.nome)||"?")}</div>`; }
+function barberAvatarHtml(b, size){ size=size||44; const f=safeImg((b&&b.foto)||getBarberFoto(b&&b.id)); if(f) return `<img src="${f}" alt="" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;flex:none">`; return `<div class="av" style="width:${size}px;height:${size}px;flex:none">${ini((b&&b.nome)||"?")}</div>`; }
 // login (e-mail) de cada barbeiro — no banco (barbers.email) + cópia local
 function getBarberEmail(b){ if(!b) return ""; if(b.email) return b.email; try{ return localStorage.getItem("sb_barberemail_"+b.id)||""; }catch(e){ return ""; } }
 function setBarberEmailLocal(id, email){ try{ if(email) localStorage.setItem("sb_barberemail_"+id, String(email).toLowerCase()); else localStorage.removeItem("sb_barberemail_"+id); }catch(e){} }
@@ -409,7 +409,8 @@ async function acharBarbeiroPorEmail(email){
 // avatar de terceiros (equipe/rede): usa a foto do perfil se existir, senão iniciais
 function pAvatar(p, size){
   size = size||44;
-  if(p && p.foto) return `<img src="${p.foto}" alt="" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;flex:none">`;
+  const f = safeImg(p && p.foto);
+  if(f) return `<img src="${f}" alt="" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;flex:none">`;
   return `<div class="av" style="width:${size}px;height:${size}px;flex:none">${ini((p&&p.nome)||"?")}</div>`;
 }
 function fotoBtn(scope){
@@ -571,6 +572,8 @@ function descDe(nome){
   return k ? (+descontos[k]||0) : 0;
 }
 function setDescCli(nome, v){ const p=Math.max(0,Math.min(90,+v||0)); if(p>0) descontos[nome]=p; else delete descontos[nome]; saveDescontos(); }
+// desconto por cliente: lê o nome do data-attribute (evita injeção via handler inline)
+document.addEventListener("input", function(e){ const el=e.target; if(!el||!el.dataset||el.dataset.descCli==null) return; setDescCli(el.dataset.descCli, el.value); });
 // preço do serviço para o cliente atual, já com o desconto vinculado ao nome
 function precoCliente(){
   const base = S.service ? S.service.preco : 0;
@@ -593,7 +596,24 @@ let lembretes = [
 
 const fmt = n => "R$ " + n.toFixed(2).replace(".",",");
 const hhmm = m => String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0");
-const ini = n => n.split(" ").map(x=>x[0]).join("").slice(0,2);
+// ===== Segurança contra XSS: escape de saída + validação de imagens/URLs =====
+// Todo dado vindo do usuário ou do banco é NÃO confiável: escapar antes de ir pro innerHTML.
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+// só imagem raster segura: data:image/(png|jpeg|webp|gif);base64 ou http(s). SVG arbitrário é BLOQUEADO.
+function safeImg(v){
+  v = String(v==null?"":v);
+  if(/["'<>\s]/.test(v)===false && /^https?:\/\/[^\s]+$/i.test(v)) return v;
+  if(/^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(v.replace(/\s+/g,""))) return v.replace(/\s+/g,"");
+  return "";
+}
+// href seguro: só http(s)/mailto/tel; bloqueia javascript:, data:, vbscript: etc.
+function safeUrl(v){
+  v = String(v==null?"":v).trim();
+  if(/^(https?:|mailto:|tel:)/i.test(v) && !/["'<>\s]/.test(v)) return v;
+  return "#";
+}
+// iniciais para avatar: remove qualquer caractere que possa virar HTML
+const ini = n => String(n==null?"":n).replace(/[^0-9A-Za-zÀ-ÿ ]/g,"").split(" ").filter(Boolean).map(x=>x[0]).join("").slice(0,2);
 
 // Ícones vetoriais preenchidos (silhueta), todos no mesmo estilo. Herdam a cor de .ic
 const SV = s => `<svg viewBox="0 0 24 24" fill="currentColor" width="23" height="23">${s}</svg>`;
@@ -636,7 +656,7 @@ const SVC_ICON_PALETTE = [
 function isImgIcon(v){ return typeof v==="string" && v.slice(0,5)==="data:"; }
 function iconValido(v){ return !!(v && (isImgIcon(v) || ICONS[v])); }
 // imagem preenche TODO o ícone (.ic); SVG interno mantém o tamanho padrão
-function iconHtml(v, size){ if(isImgIcon(v)) return `<img src="${v}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block">`; return ICONS[v] || ""; }
+function iconHtml(v, size){ if(isImgIcon(v)){ const u=safeImg(v); return u?`<img src="${u}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block">`:(ICONS.scissors); } return ICONS[v] || ""; }
 // galeria de ícones do próprio dono (imagens), por aparelho
 function getMyIcons(){ try{ return JSON.parse(localStorage.getItem("sb_myicons")||"[]"); }catch(e){ return []; } }
 function saveMyIcons(a){ try{ localStorage.setItem("sb_myicons", JSON.stringify((a||[]).slice(0,30))); }catch(e){} }
@@ -783,7 +803,7 @@ function renderClient(){
       const slot = indisp? "em breve" : (s.slots? "horários disponíveis":"sem horários hoje");
       // sem barbeiro ou sem localização: aparece na lista mas não é clicável
       const click = indisp? "" : ` data-a="shop:${s.id}"`;
-      h+=`<div class="tile ${(s.slots&&!indisp)?'':'off'}"${click} style="${indisp?'cursor:default':''}"><div class="ic">${ICONS.shop}</div><div style="flex:1"><div class="nm">${s.nome}</div><div class="sb">${s.bairro}${d} · ${slot}</div></div>${indisp?'':'<div class="ar">&rsaquo;</div>'}</div>`;
+      h+=`<div class="tile ${(s.slots&&!indisp)?'':'off'}"${click} style="${indisp?'cursor:default':''}"><div class="ic">${ICONS.shop}</div><div style="flex:1"><div class="nm">${esc(s.nome)}</div><div class="sb">${esc(s.bairro)}${d} · ${slot}</div></div>${indisp?'':'<div class="ar">&rsaquo;</div>'}</div>`;
     });
     }
     main.innerHTML=h; return;
@@ -792,27 +812,27 @@ function renderClient(){
   if(S.shop){
     const sf = S.shop.foto || getShopFoto(S.shop.id);
     h+=`<div style="display:flex;justify-content:center;margin:2px 0 10px">${
-      sf ? `<img src="${sf}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover">`
+      sf ? `<img src="${safeImg(sf)}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover">`
          : `<div class="av" style="width:44px;height:44px">${ini(S.shop.nome)}</div>`}</div>`;
   }
   if(S.step===1){
     const shopBarbers = barbers.filter(b=> S.shop.barbers.includes(b.id));
-    h+=`<div class="eyebrow">${S.shop.nome} · Passo 1 de 4</div><h1>Quem corta seu cabelo?</h1>`;
-    shopBarbers.forEach(function(b){ const bf=b.foto||getBarberFoto(b.id);
-      h+=`<div class="tile ${S.barber===b.id?'sel':''}" data-a="b:${b.id}"><div class="ic"${bf?' style="padding:0;overflow:hidden"':''}>${bf?`<img src="${bf}" alt="" style="width:100%;height:100%;object-fit:cover">`:ini(b.nome)}</div><div><div class="nm">${b.nome}</div><div class="tags">${b.esp.join(" · ")}</div></div><div class="ar">&rsaquo;</div></div>`; });
+    h+=`<div class="eyebrow">${esc(S.shop.nome)} · Passo 1 de 4</div><h1>Quem corta seu cabelo?</h1>`;
+    shopBarbers.forEach(function(b){ const bf=safeImg(b.foto||getBarberFoto(b.id));
+      h+=`<div class="tile ${S.barber===b.id?'sel':''}" data-a="b:${b.id}"><div class="ic"${bf?' style="padding:0;overflow:hidden"':''}>${bf?`<img src="${bf}" alt="" style="width:100%;height:100%;object-fit:cover">`:ini(b.nome)}</div><div><div class="nm">${esc(b.nome)}</div><div class="tags">${esc((b.esp||[]).join(" · "))}</div></div><div class="ar">&rsaquo;</div></div>`; });
     h+=`<div class="tile ${S.barber==='any'?'sel':''}" data-a="b:any"><div class="ic">${ICONS.star}</div><div><div class="nm">Qualquer um</div><div class="sb">Primeiro horário livre</div></div><div class="ar">&rsaquo;</div></div>`;
     h+=`<div class="hint" style="text-align:center;cursor:pointer" data-a="trocashop">Trocar de barbearia</div>`;
   }
   if(S.step===2){
     // seleção múltipla: o cliente pode marcar quantos serviços quiser
     if(!S.servSel) S.servSel = (S.service && (S.service.ids || [S.service.id])) || [];
-    h+=`<div class="eyebrow">${S.shop?S.shop.nome+" · ":""}Passo 2 de 4</div><h1>O que vamos fazer?</h1>`;
+    h+=`<div class="eyebrow">${S.shop?esc(S.shop.nome)+" · ":""}Passo 2 de 4</div><h1>O que vamos fazer?</h1>`;
     h+=`<div class="hint" style="margin-top:-10px;margin-bottom:10px">Toque para marcar — pode escolher mais de um serviço.</div>`;
     const svcList = services.filter(function(x){ return !S.shop || !x.shop_id || x.shop_id===S.shop.id; })
       .sort(function(a,b){ return svcOrder(a.nome)-svcOrder(b.nome) || (a.nome||"").localeCompare(b.nome||""); });
     if(!svcList.length) h+=`<div class="lr" style="justify-content:center;color:var(--mut)">Esta barbearia ainda não cadastrou serviços.</div>`;
     svcList.forEach(s=>{ const on=S.servSel.indexOf(s.id)>=0;
-      h+=`<div class="tile ${on?'sel':''}" data-a="s:${s.id}"><div class="ic">${svcIcon(s)}</div><div><div class="nm">${s.nome}</div><div class="sb">${s.dur} minutos</div></div><div class="pr">${on?"✓ ":""}${fmt(s.preco)}</div></div>`; });
+      h+=`<div class="tile ${on?'sel':''}" data-a="s:${s.id}"><div class="ic">${svcIcon(s)}</div><div><div class="nm">${esc(s.nome)}</div><div class="sb">${s.dur} minutos</div></div><div class="pr">${on?"✓ ":""}${fmt(s.preco)}</div></div>`; });
     if(S.servSel.length){
       const sel = svcList.filter(s=>S.servSel.indexOf(s.id)>=0);
       const tot = sel.reduce((t,s)=>t+Number(s.preco||0),0), durTot = sel.reduce((t,s)=>t+Number(s.dur||0),0);
@@ -849,7 +869,7 @@ function renderClient(){
       });
       h+=`</div>`;
       if(slots.length && !temLivre) h+=`<div class="lr" style="justify-content:center;color:var(--mut);text-align:center;margin-top:10px">Nenhum horário livre neste dia. Escolha outro dia.</div>`;
-      h+=`<div class="hint">${labelDia(S.dia).top} · ${S.service.nome} (${S.service.dur} min). Horários riscados estão indisponíveis.</div>`;
+      h+=`<div class="hint">${labelDia(S.dia).top} · ${esc(S.service.nome)} (${S.service.dur} min). Horários riscados estão indisponíveis.</div>`;
       if(S.time!==null) h+=`<button class="btn" id="btnAgendar" data-a="next">Agendar agora</button>`;
     }
   }
@@ -888,7 +908,7 @@ function renderClient(){
           `</div>`;
       h+=`<div class="formnote" style="margin:-4px 2px 8px;font-size:12px;color:var(--mut)">E-mail e endereço são exigidos pela operadora para cobrar no cartão.</div>`;
     }
-    h+=`<div class="lr" style="margin-top:6px"><span class="c">${b} · ${S.service.nome} · ${S.dia?labelDia(S.dia).top+" "+labelDia(S.dia).bot+" · ":""}${hhmm(S.time)}</span><b id="pgPreco">${pv.pct?`<s style="color:var(--mut);font-weight:400">${fmt(pv.base)}</s> ${fmt(pv.final)}`:fmt(pv.base)}</b></div>`;
+    h+=`<div class="lr" style="margin-top:6px"><span class="c">${esc(b)} · ${esc(S.service.nome)} · ${S.dia?labelDia(S.dia).top+" "+labelDia(S.dia).bot+" · ":""}${hhmm(S.time)}</span><b id="pgPreco">${pv.pct?`<s style="color:var(--mut);font-weight:400">${fmt(pv.base)}</s> ${fmt(pv.final)}`:fmt(pv.base)}</b></div>`;
     h+=`<div class="hint" id="pgDescMsg" style="margin-top:4px;${pv.pct?'':'display:none'}">🎉 Você tem <b>${pv.pct}% de desconto</b> neste corte, cortesia da barbearia.</div>`;
     if(method==="cartao"){
       if(showSaved){
@@ -896,7 +916,7 @@ function renderClient(){
         cards.forEach(function(c,i){
           h+=`<div class="box" style="margin-bottom:8px;display:flex;align-items:center;gap:12px">
               <div style="font-size:22px">💳</div>
-              <div style="flex:1"><div class="nm" style="font-size:15px">${c.brand||"Cartão"} •••• ${c.last4||"0000"}</div><div class="sb">${c.holder||""}</div></div>
+              <div style="flex:1"><div class="nm" style="font-size:15px">${esc(c.brand||"Cartão")} •••• ${esc(c.last4||"0000")}</div><div class="sb">${esc(c.holder||"")}</div></div>
               <button class="btn small" data-a="paysaved:${i}" style="margin:0">Pagar</button>
             </div>
             <div class="hint" style="text-align:right;margin:-4px 2px 8px;cursor:pointer;color:var(--mut)" data-a="delcard:${i}">remover cartão</div>`;
@@ -923,7 +943,7 @@ function renderClient(){
         <button class="btn out" data-a="reset">Voltar ao início</button></div>`;
     } else {
       const b = S.barber==="any"?"Qualquer barbeiro":barbers.find(x=>x.id===S.barber).nome;
-      h+=`<div class="center"><div class="eyebrow">Avaliação · ${b}</div><h1>Como foi seu corte?</h1>
+      h+=`<div class="center"><div class="eyebrow">Avaliação · ${esc(b)}</div><h1>Como foi seu corte?</h1>
         <div class="hint" style="margin-top:-10px;margin-bottom:4px">Toque nas estrelas para avaliar o atendimento.</div>
         <div class="ratestars">${[1,2,3,4,5].map(n=>`<span class="rst ${n<=(S.stars||0)?'on':''}" data-a="star:${n}">${ICONS.star}</span>`).join("")}</div>
         <div class="ratelabel">${S.stars?labels[S.stars]:"&nbsp;"}</div>
@@ -939,16 +959,16 @@ function renderClient(){
       ${pv.pct?`<div class="hint" style="text-align:center;margin-top:-4px">${pv.pct}% de desconto aplicado</div>`:""}
       <div class="timer">expira em <span id="timer">05:00</span></div>
       ${S.pixData && S.pixData.qrImage
-        ? `<div class="qrwrap"><img src="data:image/png;base64,${S.pixData.qrImage}" style="width:100%;height:100%;object-fit:contain" alt="QR PIX"></div>
+        ? `<div class="qrwrap"><img src="${safeImg('data:image/png;base64,'+S.pixData.qrImage)}" style="width:100%;height:100%;object-fit:contain" alt="QR PIX"></div>
       <div class="lbl">PIX copia e cola</div>
-      <div class="copy">${S.pixData.copiaECola}</div>`
+      <div class="copy">${esc(S.pixData.copiaECola)}</div>`
         : (S.pixTried
           ? `<div class="qrwrap"><div class="qr">${qr()}</div></div>
       <div class="lbl">PIX copia e cola (simulado)</div>
       <div class="copy">00020126BR.GOV.BCB.PIX5204000053039865402${pv.final.toFixed(2)}5802BR6009SEUBARBA6304</div>`
           : `<div class="hint" style="text-align:center;padding:44px 0">Gerando PIX...</div>`)}
       ${(S.pixData||S.pixTried)?`<button class="btn" data-a="copiapix" style="margin-top:10px">Copiar código PIX</button>`:""}
-      <div class="hint" style="text-align:center">${S.payer.nome} · ${b} · ${S.service.nome} · ${hhmm(S.time)}</div>
+      <div class="hint" style="text-align:center">${esc(S.payer.nome)} · ${esc(b)} · ${esc(S.service.nome)} · ${hhmm(S.time)}</div>
       <div id="paybox"><button class="btn" data-a="pay">Já paguei</button></div>
       </div>`;
   }
@@ -1005,7 +1025,7 @@ function confirmarPagamento(){
   let c=(fidelidade[nomeCli]||0); c = (c%10===0 && c>0) ? 1 : c+1; fidelidade[nomeCli]=c;
   clearInterval(timerInt);
   const wa = waAgendamento();
-  const waBtn = wa ? `<a class="btn" href="${wa}" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none;background:linear-gradient(135deg,#25d366,#1da851);color:#fff;border-color:#1da851;margin-top:14px">Avisar a barbearia no WhatsApp</a>` : "";
+  const waBtn = wa ? `<a class="btn" href="${safeUrl(wa)}" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none;background:linear-gradient(135deg,#25d366,#1da851);color:#fff;border-color:#1da851;margin-top:14px">Avisar a barbearia no WhatsApp</a>` : "";
   const extra = wa ? " Toque no botão verde para avisar a barbearia pelo WhatsApp." : "";
   const successInner = `<div class="ok"><b>Pagamento confirmado</b><p>Seu horário está reservado.${extra} Após o corte, avalie o atendimento.</p></div>${waBtn}<button class="btn out" data-a="meusag" style="margin-top:12px">Ver meus agendamentos</button><button class="btn out" data-a="rate">Avaliar atendimento</button><button class="btn out" data-a="reset">Novo agendamento</button>`;
   const box = document.getElementById("paybox");
@@ -1063,7 +1083,7 @@ async function chargeCard(extra){
 const CARD_PEND = "Não foi possível concluir o pagamento no cartão agora. Tente novamente ou use o PIX.";
 function payBusy(btn, txt){ if(btn){ btn.disabled=true; btn.style.opacity=".7"; btn.innerHTML=`<span class="spin" style="vertical-align:middle;margin-right:8px"></span>${txt||"Processando pagamento…"}`; } }
 function payErro(btn, msg, restore){
-  const pe=document.getElementById("payerr"); if(pe){ pe.innerHTML=`<div class="errmsg">${msg}</div>`; pe.scrollIntoView({block:"center"}); }
+  const pe=document.getElementById("payerr"); if(pe){ pe.innerHTML=`<div class="errmsg">${esc(msg)}</div>`; pe.scrollIntoView({block:"center"}); }
   if(btn){ btn.disabled=false; btn.style.opacity="1"; btn.innerHTML=restore; }
 }
 // pagamento no cartão de crédito (via Asaas). Sucesso confirma o agendamento na hora.
@@ -1209,7 +1229,7 @@ function field(id,label,{req=true,type="text",ph="",val="",opts=null}={}){
     return `<div class="field"><label>${label}${star}</label><select id="${id}">`+
       opts.map(o=>`<option value="${o.v}" ${val===o.v?'selected':''}>${o.t}</option>`).join("")+`</select></div>`;
   }
-  return `<div class="field"><label>${label}${star}</label><input id="${id}" type="${type}" placeholder="${ph}" value="${val}" ${req?'data-req="1"':''}></div>`;
+  return `<div class="field"><label>${label}${star}</label><input id="${id}" type="${type}" placeholder="${esc(ph)}" value="${esc(val)}" ${req?'data-req="1"':''}></div>`;
 }
 // dd/mm/aaaa -> aaaa-mm-dd (formato aceito pelo banco); null se vazio/incompleto
 function brDateToISO(v){
@@ -1240,7 +1260,7 @@ function obSteps(){
   if(S.barberType==='freelancer') return ["dados","servicos","horarios"];
   return ["barbearia","dados","endereco","horarios"];
 }
-function formErr(msg){ const fe=document.getElementById("formerr"); if(fe) fe.innerHTML=`<div class="errmsg">${msg}</div>`; }
+function formErr(msg){ const fe=document.getElementById("formerr"); if(fe) fe.innerHTML=`<div class="errmsg">${esc(msg)}</div>`; }
 // bloco de foto obrigatória usado no cadastro (studio e freelancer)
 function fotoObrigatoria(scope, titulo, subt){
   const tem = !!getAvatar(scope);
@@ -1314,7 +1334,7 @@ function renderOnboarding(){
     h += field("address","Endereço",{ph:"Rua / Avenida",val:obVal("address")});
     h += field("province","Bairro",{ph:"Bairro",val:obVal("province")});
     const temLoc = S.obDraft.lat!=null && S.obDraft.lng!=null;
-    h += `<div class="field"><label>Link da barbearia no Google Maps ${temLoc?'✓':''}</label><input id="obMaps" placeholder="Cole aqui o link do Google Maps" value="${S.obDraft.mapsLink||""}"></div>`;
+    h += `<div class="field"><label>Link da barbearia no Google Maps ${temLoc?'✓':''}</label><input id="obMaps" placeholder="Cole aqui o link do Google Maps" value="${esc(S.obDraft.mapsLink||"")}"></div>`;
     h += `<button class="btn ${temLoc?'':'out'}" data-a="obGeo" style="margin:0 0 6px">${temLoc?'✓ Localização adicionada':'📍 Ou usar minha localização atual (GPS)'}</button>`;
     h += `<div class="hint" id="obGeoMsg" style="margin-top:0;text-align:center">${temLoc?'O cliente encontra seu studio em “A mais próxima de você”.':'Cole o link do Google Maps ou use o GPS.'}</div>`;
     h += `<div class="formnote">Cidade e UF são preenchidas pelo CEP. Ao criar a conta, o Asaas envia um e-mail de ativação.</div>`;
@@ -1345,8 +1365,8 @@ function renderOnboarding(){
     h += `<div class="hint" style="margin-top:-6px;margin-bottom:10px">Dados de cada colaborador: nome, WhatsApp, comissão e o que faz.</div>`;
     S.obDraft.colabs.forEach(function(co,i){
       h += `<div class="box" style="margin-bottom:14px"><div class="sllbl" style="margin-bottom:8px;color:var(--gold)">Colaborador ${("0"+(i+1)).slice(-2)}</div>`;
-      h += `<div class="field"><label>Nome</label><input id="co_nome_${i}" value="${co.nome||""}" placeholder="Nome do colaborador"></div>`;
-      h += `<div class="grid2"><div class="field"><label>WhatsApp</label><input id="co_tel_${i}" value="${co.tel||""}" placeholder="(11) 99999-9999"></div><div class="field"><label>Comissão por serviço (%)</label><input type="number" id="co_com_${i}" value="${co.com!=null?co.com:40}" min="0" max="100"></div></div>`;
+      h += `<div class="field"><label>Nome</label><input id="co_nome_${i}" value="${esc(co.nome||"")}" placeholder="Nome do colaborador"></div>`;
+      h += `<div class="grid2"><div class="field"><label>WhatsApp</label><input id="co_tel_${i}" value="${esc(co.tel||"")}" placeholder="(11) 99999-9999"></div><div class="field"><label>Comissão por serviço (%)</label><input type="number" id="co_com_${i}" value="${co.com!=null?co.com:40}" min="0" max="100"></div></div>`;
       h += `<div class="sllbl" style="margin:6px 0 8px">Serviços que faz e tempo de cada um</div>`;
       h += svcPicker(co.svc, "csvc:"+i, "co_dur_"+i+"_");
       h += `</div>`;
@@ -1357,7 +1377,7 @@ function renderOnboarding(){
     h += `<div class="hint" style="margin-top:-6px;margin-bottom:10px">Freelancers disponíveis na sua região. Toque para contratar.</div>`;
     profissionais.forEach(function(p,i){
       const on = S.obDraft.freelas.indexOf(p.nome)>=0;
-      h += `<div class="box" style="margin-bottom:10px;${on?"border-color:var(--gold)":""}"><div style="display:flex;align-items:center;gap:10px"><div class="ic" style="width:40px;height:40px;border-radius:50%;background:rgba(0,0,0,.1);display:flex;align-items:center;justify-content:center;font-weight:700">${ini(p.nome)}</div><div style="flex:1"><div class="nm" style="font-size:15px">${p.nome}</div><div class="sb">${p.esp.join(" · ")} · ${ICONS.star} ${p.nota} · ${p.dist}</div></div><button class="btn ${on?"":"out"} small" data-a="freela:${i}">${on?"✓ Contratado":"Contratar"}</button></div></div>`;
+      h += `<div class="box" style="margin-bottom:10px;${on?"border-color:var(--gold)":""}"><div style="display:flex;align-items:center;gap:10px"><div class="ic" style="width:40px;height:40px;border-radius:50%;background:rgba(0,0,0,.1);display:flex;align-items:center;justify-content:center;font-weight:700">${ini(p.nome)}</div><div style="flex:1"><div class="nm" style="font-size:15px">${esc(p.nome)}</div><div class="sb">${esc(p.esp.join(" · "))} · ${ICONS.star} ${p.nota} · ${p.dist}</div></div><button class="btn ${on?"":"out"} small" data-a="freela:${i}">${on?"✓ Contratado":"Contratar"}</button></div></div>`;
     });
   }
   else if(key==="horarios"){
@@ -1530,7 +1550,7 @@ function renderAccount(){
   let h = `<div class="eyebrow">Minha conta</div>`;
   // recuperação de senha — o link do e-mail cria uma sessão temporária; aqui a pessoa define a nova senha
   if(stage==="recover"){
-    h += `<h1 class="bg">Criar nova senha</h1><div class="hint" style="margin-top:-6px;margin-bottom:12px">Defina a nova senha da sua conta${em?" ("+em+")":""}.</div><div id="accerr"></div>`;
+    h += `<h1 class="bg">Criar nova senha</h1><div class="hint" style="margin-top:-6px;margin-bottom:12px">Defina a nova senha da sua conta${em?" ("+esc(em)+")":""}.</div><div id="accerr"></div>`;
     h += field("accNew","Nova senha",{type:"password",ph:"Mínimo 6 caracteres",val:""});
     h += field("accNew2","Confirmar nova senha",{type:"password",ph:"Repita a senha",val:""});
     h += `<button class="btn" data-a="doResetSave">Salvar nova senha</button>`;
@@ -1540,7 +1560,7 @@ function renderAccount(){
   if(stage==="forgot"){
     h += `<h1 class="bg">Esqueci minha senha</h1>`;
     if(S.resetSent){
-      h += `<div class="ok" style="margin-top:6px"><b>Link enviado!</b><p>Enviamos um e-mail para <b>${S.resetSent}</b> com o link para criar uma nova senha. Confira também a caixa de spam.</p></div>`;
+      h += `<div class="ok" style="margin-top:6px"><b>Link enviado!</b><p>Enviamos um e-mail para <b>${esc(S.resetSent)}</b> com o link para criar uma nova senha. Confira também a caixa de spam.</p></div>`;
       h += `<button class="btn out" data-a="accLogin" style="margin-top:12px">Voltar ao login</button>`;
     } else {
       h += `<div class="hint" style="margin-top:-6px;margin-bottom:12px">Informe seu e-mail. Enviaremos um link para criar uma nova senha.</div><div id="accerr"></div>`;
@@ -1552,7 +1572,7 @@ function renderAccount(){
   }
   if(em){
     const freela = isFreela() && !(S.myShops && S.myShops.length);
-    h += `<h1 class="bg">Sua conta</h1><div class="lr"><span class="c">Logado como</span><b>${em}</b></div>`;
+    h += `<h1 class="bg">Sua conta</h1><div class="lr"><span class="c">Logado como</span><b>${esc(em)}</b></div>`;
     if(em.toLowerCase()===ADMIN_EMAIL) h += `<button class="btn" data-a="toAdmin">Painel do administrador</button>`;
     if(freela){
       h += `<button class="btn" data-a="freelaPanel" style="margin-top:10px">Ver oportunidades</button>`;
@@ -1575,7 +1595,7 @@ function renderAccount(){
       h += `<div class="lr" style="justify-content:center;color:var(--mut)">Você ainda não tem barbearia cadastrada.</div>`;
     } else S.myShops.forEach(function(sp){
       const stc = sp.ativo ? `<span class="chip ok">Ativa</span>` : `<span class="chip" style="background:rgba(255,159,10,.2);color:#a86400">Inativa</span>`;
-      h += `<div class="box" style="margin-bottom:10px"><div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><div class="nm" style="font-size:15px">${sp.nome||"(sem nome)"}</div><div class="sb">${sp.bairro||""}</div></div>${stc}</div>
+      h += `<div class="box" style="margin-bottom:10px"><div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><div class="nm" style="font-size:15px">${esc(sp.nome||"(sem nome)")}</div><div class="sb">${esc(sp.bairro||"")}</div></div>${stc}</div>
         <div class="fidwrap" style="justify-content:flex-end;gap:8px;flex-wrap:wrap"><button class="btn small" data-a="dash:${sp.id}">Painel da barbearia</button><button class="btn out small" data-a="shopEdit:${sp.id}:account">Editar</button><button class="btn out small" data-a="admBarb:${sp.id}:account">Equipe</button><button class="btn out small" data-a="svcOpen:${sp.id}:account">Serviços</button></div></div>`;
     });
   } else if(st==="signupType"){
@@ -1625,7 +1645,7 @@ function traduzErro(raw){
   if(/user not found/.test(m)) return "Conta não encontrada.";
   return raw || "Ocorreu um erro. Tente novamente.";
 }
-function accErr(msg){ const el=document.getElementById("accerr"); if(el) el.innerHTML=`<div class="errmsg">${msg}</div>`; }
+function accErr(msg){ const el=document.getElementById("accerr"); if(el) el.innerHTML=`<div class="errmsg">${esc(msg)}</div>`; }
 async function doLogin(){
   const {email,pass,e,p}=accCreds();
   if(!email){ if(e)e.classList.add("err"); return; } if(!pass){ if(p)p.classList.add("err"); return; }
@@ -1743,8 +1763,8 @@ async function abrirAgendaBarbeiro(b){
 function renderBarberSelf(){
   tabbar.style.display="none"; steps.style.display="none";
   const b = S.barberSelf||{}; const nome = b.nome||"Barbeiro";
-  let h = `<div class="eyebrow">Bem-vindo</div><h1 class="bg">Olá, ${nome.split(" ")[0]}</h1>`;
-  h += `<div class="box" style="margin-bottom:14px;display:flex;align-items:center;gap:12px">${barberAvatarHtml(b,48)}<div style="flex:1"><div class="nm" style="font-size:16px">${nome}</div><div class="sb">${(b.especialidades||[]).join(" · ")||"Barbeiro"}${S.barberSelfShop?" · "+S.barberSelfShop.nome:""}</div></div></div>`;
+  let h = `<div class="eyebrow">Bem-vindo</div><h1 class="bg">Olá, ${esc(nome.split(" ")[0])}</h1>`;
+  h += `<div class="box" style="margin-bottom:14px;display:flex;align-items:center;gap:12px">${barberAvatarHtml(b,48)}<div style="flex:1"><div class="nm" style="font-size:16px">${esc(nome)}</div><div class="sb">${esc((b.especialidades||[]).join(" · ")||"Barbeiro")}${S.barberSelfShop?" · "+esc(S.barberSelfShop.nome):""}</div></div></div>`;
   h += `<div class="sllbl" style="margin:4px 0 8px">Minha agenda</div>`;
   const ags = (S.shopAgenda||[]).slice().filter(function(a){ return a.status!=="cancelado" && a.barbeiro && a.barbeiro===nome; })
     .sort(function(a,b2){ return (a.dia||"").localeCompare(b2.dia||"") || (Number(a.minuto)-Number(b2.minuto)); });
@@ -1756,14 +1776,14 @@ function renderBarberSelf(){
     const stBg={pago:"rgba(52,199,89,.18)",aguardando:"rgba(255,159,10,.2)"}, stFg={pago:"#1f8f3e",aguardando:"#a86400"}, stLab={pago:"Pago",aguardando:"Aguarda"};
     let curDia="";
     ags.forEach(function(a){
-      if(a.dia!==curDia){ curDia=a.dia; const l=a.dia?labelDia(a.dia):null; h+=`<div class="sllbl" style="margin:16px 0 8px">${l?l.top+" · "+l.bot:(a.dia||"")}</div>`; }
+      if(a.dia!==curDia){ curDia=a.dia; const l=a.dia?labelDia(a.dia):null; h+=`<div class="sllbl" style="margin:16px 0 8px">${l?l.top+" · "+l.bot:esc(a.dia||"")}</div>`; }
       const zap=zapKey(a.cliente_zap);
       const waMsg=encodeURIComponent(`Olá ${a.cliente_nome||''}! Aqui é o ${nome} 💈 Sobre o seu horário de ${hhmm(a.minuto)}.`);
       const waBtn=zap?`<a class="wabtn" href="https://wa.me/55${zap}?text=${waMsg}" target="_blank" rel="noopener"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15l-1.3 4.7 4.8-1.3A10 10 0 1 0 12 2zm5.9 14.3c-.2.7-1.4 1.3-2 1.4-.5.1-1.2.1-1.9-.1-.4-.1-1-.3-1.7-.6-3-1.3-4.9-4.3-5-4.5-.2-.2-1.2-1.6-1.2-3s.7-2.1 1-2.4c.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 2c.1.1.1.3 0 .5l-.4.5-.3.3c-.2.2-.3.4-.2.6.2.4.8 1.3 1.6 2 .9.9 1.7 1.1 2 1.3.2.1.4.1.6-.1l.7-.9c.2-.2.4-.2.6-.1l1.9.9c.3.1.4.2.5.3.1.2.1.7-.1 1.3z"/></svg>WhatsApp</a>`:"";
       h+=`<div class="ag" style="flex-direction:column;align-items:stretch;gap:10px">
         <div style="display:flex;align-items:center;gap:14px">
           <div class="hm">${hhmm(a.minuto)}</div>
-          <div style="flex:1"><div class="who">${a.cliente_nome||'Cliente'}</div><div class="sv">${a.servico||'Serviço'} · ${fmt(Number(a.preco||0))}</div></div>
+          <div style="flex:1"><div class="who">${esc(a.cliente_nome||'Cliente')}</div><div class="sv">${esc(a.servico||'Serviço')} · ${fmt(Number(a.preco||0))}</div></div>
           <div class="chip" style="background:${stBg[a.status]||stBg.pago};color:${stFg[a.status]||stFg.pago}">${stLab[a.status]||a.status||''}</div>
         </div>${waBtn?`<div class="fidwrap" style="border-top-color:rgba(0,0,0,.05);justify-content:flex-end">${waBtn}</div>`:""}
       </div>`;
@@ -1799,13 +1819,13 @@ function agCardHtml(a){
   const l = a.dia ? labelDia(a.dia) : null;
   const quando = (l ? l.top+" "+l.bot : "") + (a.minuto!=null ? " · "+hhmm(a.minuto) : "");
   const st = a.status==="pago" ? `<span class="chip ok">Pago</span>` : `<span class="chip" style="background:rgba(255,159,10,.2);color:#a86400">${a.status||"—"}</span>`;
-  return `<div class="box" style="margin-bottom:10px"><div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><div class="nm" style="font-size:15px">${a.servico||"Serviço"}</div><div class="sb">${quando}</div><div class="sb">${a.barbearia||""}${a.barbeiro?" · "+a.barbeiro:""}</div></div><div style="text-align:right">${st}<div class="sb" style="margin-top:6px">${a.preco!=null?fmt(Number(a.preco)):""}</div></div></div></div>`;
+  return `<div class="box" style="margin-bottom:10px"><div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><div class="nm" style="font-size:15px">${esc(a.servico||"Serviço")}</div><div class="sb">${quando}</div><div class="sb">${esc(a.barbearia||"")}${a.barbeiro?" · "+esc(a.barbeiro):""}</div></div><div style="text-align:right">${st}<div class="sb" style="margin-top:6px">${a.preco!=null?fmt(Number(a.preco)):""}</div></div></div></div>`;
 }
 function renderMeusAg(){
   tabbar.style.display="none"; steps.style.display="none";
   let h = `<div class="eyebrow">Cliente</div><h1 class="bg">Meus agendamentos</h1>
     <div class="hint" style="margin-top:-6px;margin-bottom:12px">Seus horários ficam ligados ao WhatsApp usado na hora de agendar.</div>`;
-  h += `<div style="display:flex;gap:8px;align-items:stretch;margin-bottom:14px"><div class="field" style="flex:1;margin:0"><input id="agZap" type="tel" placeholder="(11) 99999-9999" value="${S.agZap||""}"></div><button class="btn out small" data-a="agBuscar" style="white-space:nowrap">Buscar</button></div>`;
+  h += `<div style="display:flex;gap:8px;align-items:stretch;margin-bottom:14px"><div class="field" style="flex:1;margin:0"><input id="agZap" type="tel" placeholder="(11) 99999-9999" value="${esc(S.agZap||"")}"></div><button class="btn out small" data-a="agBuscar" style="white-space:nowrap">Buscar</button></div>`;
   if(S.agList===null){
     h += `<div class="lr" style="justify-content:center;color:var(--mut)">Carregando…</div>`;
   } else if(Array.isArray(S.agList)){
@@ -1828,7 +1848,7 @@ function renderClientPanel(){
   // cartão do perfil: foto + nome + e-mail
   h += `<div class="box" style="margin-bottom:14px"><div style="display:flex;align-items:center;gap:14px">
     ${avatarHtml("cliente", nome, 64)}
-    <div style="flex:1"><div class="nm" style="font-size:17px">${nome}</div><div class="sb">${em}</div></div>
+    <div style="flex:1"><div class="nm" style="font-size:17px">${esc(nome)}</div><div class="sb">${esc(em)}</div></div>
   </div>
   <div class="fidwrap" style="border-top-color:rgba(0,0,0,.05);justify-content:flex-end;gap:8px">
     ${fotoBtn("cliente")}
@@ -1875,16 +1895,16 @@ function renderBarber(){
   if(dono && !getAvatar("studio")) h+=`<div class="errmsg" style="margin-bottom:14px"><b>Sua barbearia não está ativa:</b> adicione uma foto do studio na aba <b>Conta</b> para aparecer aos clientes.</div>`;
   if(dono && S.dashShop && (S.dashShop.lat==null || S.dashShop.lng==null)) h+=`<div class="errmsg" style="margin-bottom:14px"><b>Sua barbearia não está ativa na página inicial:</b> adicione a localização (GPS) na aba <b>Conta</b>.</div>`;
   if(dono && S.dashShop && !planoOk(S.dashShop)) h+=`<div class="errmsg" style="margin-bottom:14px"><b>Sua barbearia não está ativa na página inicial:</b> ative o plano da plataforma (R$ 59,90/mês) na aba <b>Conta</b>.</div>`;
-  if(dono && S.dashShop && !S.dashShop.plano_id && S.dashShop.trial_until && planoOk(S.dashShop)) h+=`<div class="ok" style="margin-bottom:14px"><b>Mês grátis ativo</b><p>Sua barbearia está em período de teste até ${S.dashShop.trial_until.split("-").reverse().join("/")}. Ative o plano na aba Conta para não sair do ar.</p></div>`;
+  if(dono && S.dashShop && !S.dashShop.plano_id && S.dashShop.trial_until && planoOk(S.dashShop)) h+=`<div class="ok" style="margin-bottom:14px"><b>Mês grátis ativo</b><p>Sua barbearia está em período de teste até ${esc(S.dashShop.trial_until.split("-").reverse().join("/"))}. Ative o plano na aba Conta para não sair do ar.</p></div>`;
   if(!dono && isFreela() && !getAvatar("freela")) h+=`<div class="errmsg" style="margin-bottom:14px"><b>Seu perfil não está ativo:</b> adicione uma foto de perfil na aba <b>Conta</b> para aparecer às barbearias.</div>`;
   if(S.tab==="equipe"){
-    h+=`<div class="eyebrow">${profile?profile.nomeFantasia:'Barbearia'}</div><h1 class="bg">Equipe</h1>
+    h+=`<div class="eyebrow">${esc(profile?profile.nomeFantasia:'Barbearia')}</div><h1 class="bg">Equipe</h1>
       <div class="hint" style="margin-top:-8px;margin-bottom:14px">Cadastre seus freelancers e defina a comissão de cada um.</div>`;
     team.forEach((f,i)=>{
       h+=`<div class="box" style="margin-bottom:12px">
         <div style="display:flex;align-items:center;gap:12px">
           ${pAvatar(f, 44)}
-          <div style="flex:1"><div class="nm" style="font-size:16px">${f.nome}</div><div class="sb" id="rec${i}">Receberia ${fmt(2000*f.comissao/100)} em R$ 2.000</div></div>
+          <div style="flex:1"><div class="nm" style="font-size:16px">${esc(f.nome)}</div><div class="sb" id="rec${i}">Receberia ${fmt(2000*f.comissao/100)} em R$ 2.000</div></div>
           <button class="iconbtn" data-a="delfree:${i}" title="Remover" aria-label="Remover">&times;</button>
         </div>
         <div class="slrow" style="margin:14px 0 0">
@@ -1928,11 +1948,11 @@ function renderBarber(){
         h+=`<div class="box" style="margin-bottom:12px">
           <div style="display:flex;align-items:flex-start;gap:12px">
             <div class="av">${ini(v.barbearia)}</div>
-            <div style="flex:1"><div class="nm" style="font-size:16px">${v.barbearia}</div><div class="sb">${v.local}</div></div>
+            <div style="flex:1"><div class="nm" style="font-size:16px">${esc(v.barbearia)}</div><div class="sb">${esc(v.local)}</div></div>
             <div class="pr">${v.comissao}%</div>
           </div>
           <div class="fidwrap" style="border-top-color:rgba(0,0,0,.05);justify-content:space-between">
-            <span class="sb" style="margin:0">${v.quando}</span>${act}
+            <span class="sb" style="margin:0">${esc(v.quando)}</span>${act}
           </div></div>`;
       });
     } else {
@@ -1942,7 +1962,7 @@ function renderBarber(){
         h+=`<div class="box" style="margin-bottom:12px">
           <div style="display:flex;align-items:center;gap:12px">
             ${pAvatar(p, 44)}
-            <div style="flex:1"><div class="nm" style="font-size:16px">${p.nome}</div><div class="sb">${p.esp.join(" · ")}</div></div>
+            <div style="flex:1"><div class="nm" style="font-size:16px">${esc(p.nome)}</div><div class="sb">${esc(p.esp.join(" · "))}</div></div>
             <div style="text-align:right"><div class="sb" style="display:flex;align-items:center;gap:3px;justify-content:flex-end">${stars(p.nota)}</div><div class="sb">${p.dist}</div></div>
           </div>
           ${act?`<div class="fidwrap" style="border-top-color:rgba(0,0,0,.05);justify-content:flex-end">${act}</div>`:""}
@@ -1954,7 +1974,7 @@ function renderBarber(){
   }
   if(S.tab==="dash"){
     const nome = profile? (profile.respNome||profile.nomeFantasia) : "João Silva";
-    h+=`<div class="eyebrow">${nome} · Hoje</div><h1 class="bg">Resumo do dia</h1>`;
+    h+=`<div class="eyebrow">${esc(nome)} · Hoje</div><h1 class="bg">Resumo do dia</h1>`;
     if(profile) h+=`<span class="badge ok">Conta Asaas ativa</span>`;
     h+=`<div class="kpis">
       <div class="kpi"><span class="l">Cortes</span><span class="v">${nCortes(list)}</span></div>
@@ -1962,7 +1982,7 @@ function renderBarber(){
       <div class="kpi"><span class="l">Comissão 40%</span><span class="v">${fmt(comissao(list,.4))}</span></div>
     </div><div class="eyebrow" style="margin:22px 0 10px">Mais vendidos</div>`;
     const cnt={}; list.filter(a=>a.status==="pago").forEach(a=>{const svc=services.find(s=>s.id===a.service); const n=svc?svc.nome:"Serviço"; cnt[n]=(cnt[n]||0)+1;});
-    Object.entries(cnt).sort((a,b)=>b[1]-a[1]).forEach(([n,c])=> h+=`<div class="lr"><span>${n}</span><span class="c">${c}x</span></div>`);
+    Object.entries(cnt).sort((a,b)=>b[1]-a[1]).forEach(([n,c])=> h+=`<div class="lr"><span>${esc(n)}</span><span class="c">${c}x</span></div>`);
 
     h+=`<div class="eyebrow" style="margin:22px 0 10px">Política de faltas</div>
       <div class="box">
@@ -1990,14 +2010,14 @@ function renderBarber(){
     } else {
       let curDia="";
       ags.forEach(function(a){
-        if(a.dia!==curDia){ curDia=a.dia; const l=a.dia?labelDia(a.dia):null; h+=`<div class="sllbl" style="margin:16px 0 8px">${l?l.top+" · "+l.bot:(a.dia||"")}</div>`; }
+        if(a.dia!==curDia){ curDia=a.dia; const l=a.dia?labelDia(a.dia):null; h+=`<div class="sllbl" style="margin:16px 0 8px">${l?l.top+" · "+l.bot:esc(a.dia||"")}</div>`; }
         const zap=zapKey(a.cliente_zap);
         const waMsg=encodeURIComponent(`Olá ${a.cliente_nome||''}! Aqui é da ${profile?(profile.nomeFantasia||'barbearia'):'barbearia'} 💈 Sobre o seu horário de ${hhmm(a.minuto)}.`);
         const waBtn=zap?`<a class="wabtn" href="https://wa.me/55${zap}?text=${waMsg}" target="_blank" rel="noopener"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15l-1.3 4.7 4.8-1.3A10 10 0 1 0 12 2zm5.9 14.3c-.2.7-1.4 1.3-2 1.4-.5.1-1.2.1-1.9-.1-.4-.1-1-.3-1.7-.6-3-1.3-4.9-4.3-5-4.5-.2-.2-1.2-1.6-1.2-3s.7-2.1 1-2.4c.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 2c.1.1.1.3 0 .5l-.4.5-.3.3c-.2.2-.3.4-.2.6.2.4.8 1.3 1.6 2 .9.9 1.7 1.1 2 1.3.2.1.4.1.6-.1l.7-.9c.2-.2.4-.2.6-.1l1.9.9c.3.1.4.2.5.3.1.2.1.7-.1 1.3z"/></svg>WhatsApp</a>`:"";
         h+=`<div class="ag" style="flex-direction:column;align-items:stretch;gap:10px">
           <div style="display:flex;align-items:center;gap:14px">
             <div class="hm">${hhmm(a.minuto)}</div>
-            <div style="flex:1"><div class="who">${a.cliente_nome||'Cliente'}</div><div class="sv">${a.servico||'Serviço'}${a.barbeiro?' · '+a.barbeiro:''} · ${fmt(Number(a.preco||0))}</div></div>
+            <div style="flex:1"><div class="who">${esc(a.cliente_nome||'Cliente')}</div><div class="sv">${esc(a.servico||'Serviço')}${a.barbeiro?' · '+esc(a.barbeiro):''} · ${fmt(Number(a.preco||0))}</div></div>
             <div class="chip" style="background:${stBg[a.status]||stBg.pago};color:${stFg[a.status]||stFg.pago}">${stLab[a.status]||a.status||''}</div>
           </div>${waBtn?`<div class="fidwrap" style="border-top-color:rgba(0,0,0,.05);justify-content:flex-end">${waBtn}</div>`:""}
         </div>`;
@@ -2019,13 +2039,13 @@ function renderBarber(){
       const descPct = +descontos[a.cliente]||0;
       const descBtn = descPct
         ? `<span class="slval" style="display:flex;align-items:center;gap:5px;font-size:13px">Desconto próx. corte
-             <input type="number" min="0" max="90" step="5" value="${descPct}" oninput="setDescCli('${a.cliente}',this.value)" style="width:58px;text-align:right">%
-           </span><button class="btn out small" data-a="descTg:${a.cliente}" style="margin:0">Remover</button>`
-        : `<button class="btn out small" data-a="descTg:${a.cliente}" style="margin:0">Dar desconto próx. corte</button>`;
+             <input type="number" min="0" max="90" step="5" value="${descPct}" data-desc-cli="${esc(a.cliente)}" style="width:58px;text-align:right">%
+           </span><button class="btn out small" data-a="descTg:${esc(a.cliente)}" style="margin:0">Remover</button>`
+        : `<button class="btn out small" data-a="descTg:${esc(a.cliente)}" style="margin:0">Dar desconto próx. corte</button>`;
       h+=`<div class="ag" style="flex-direction:column;align-items:stretch;gap:11px">
         <div style="display:flex;align-items:center;gap:14px">
           <div class="hm">${hhmm(a.min)}</div>
-          <div style="flex:1"><div class="who" style="${a.status==='cancelado'?'text-decoration:line-through;color:var(--mut)':''}">${a.cliente}</div><div class="sv">${s.nome} · ${fmt(a.valor)}</div></div>
+          <div style="flex:1"><div class="who" style="${a.status==='cancelado'?'text-decoration:line-through;color:var(--mut)':''}">${esc(a.cliente)}</div><div class="sv">${esc(s.nome)} · ${fmt(a.valor)}</div></div>
           <div class="chip" style="background:${bg[a.status]};color:${fg[a.status]}">${lab[a.status]}</div>
         </div>
         <div class="fidwrap"><div class="fid">${segs}</div>${flbl}</div>
@@ -2062,11 +2082,11 @@ function renderBarber(){
       h+=`<div class="eyebrow" style="margin:24px 0 10px">Promoção do mês</div>`;
       if(S.promoEdit){
         h+=`<div class="box" style="margin-bottom:14px">
-          <div class="field"><label>Descreva a promoção</label><input id="promoTxt" value="${promo||""}" placeholder="Ex.: Corte + barba = sobrancelha grátis"></div>
+          <div class="field"><label>Descreva a promoção</label><input id="promoTxt" value="${esc(promo||"")}" placeholder="Ex.: Corte + barba = sobrancelha grátis"></div>
           <button class="btn" data-a="promoSave" style="margin:0">Salvar promoção</button>
           ${promo?`<button class="btn out" data-a="promoDel" style="margin-top:8px">Remover promoção</button>`:""}</div>`;
       } else if(promo){
-        h+=`<div class="box" style="margin-bottom:14px"><div class="boxtxt"><b>${promo}</b></div>
+        h+=`<div class="box" style="margin-bottom:14px"><div class="boxtxt"><b>${esc(promo)}</b></div>
           <div class="fidwrap" style="border-top-color:rgba(0,0,0,.05);justify-content:flex-end"><button class="btn out small" data-a="promoEdit" style="margin:0">Editar</button></div></div>`;
       } else {
         h+=`<button class="btn out" data-a="promoEdit" style="margin:0 0 14px">+ Criar promoção do mês</button>`;
@@ -2076,7 +2096,7 @@ function renderBarber(){
       h+=`<div class="eyebrow" style="margin:10px 0 10px">Plano de fidelidade</div>`;
       if(S.planoEdit){
         h+=`<div class="box" style="margin-bottom:14px">
-          <div class="field"><label>Valor mensal (R$)</label><input id="planoVal" type="number" value="${plano||140}" min="0"></div>
+          <div class="field"><label>Valor mensal (R$)</label><input id="planoVal" type="number" value="${esc(plano||140)}" min="0"></div>
           <div class="boxtxt" style="margin-bottom:10px">O cliente paga um valor fixo por mês e corta quantas vezes quiser.</div>
           <button class="btn" data-a="planoSave" style="margin:0">Ativar plano</button>
           ${plano?`<button class="btn out" data-a="planoDel" style="margin-top:8px">Desativar plano</button>`:""}</div>`;
@@ -2092,8 +2112,8 @@ function renderBarber(){
     lembretes.forEach(c=>{
       const msg=`Olá ${c.nome}! 💈 Já faz ${c.dias} dias do seu último corte na ${profile?profile.nomeFantasia:'SeuBarba'}. Que tal renovar o visual? Temos horários livres. Quer que eu reserve um pra você?`;
       const url=`https://wa.me/55${c.zap.replace(/\D/g,'')}?text=${encodeURIComponent(msg)}`;
-      h+=`<div class="lr"><div><b>${c.nome}</b><div class="c" style="font-size:12px">${c.dias} dias sem cortar</div></div>
-        <a class="wabtn" href="${url}" target="_blank" rel="noopener"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15l-1.3 4.7 4.8-1.3A10 10 0 1 0 12 2zm5.9 14.3c-.2.7-1.4 1.3-2 1.4-.5.1-1.2.1-1.9-.1-.4-.1-1-.3-1.7-.6-3-1.3-4.9-4.3-5-4.5-.2-.2-1.2-1.6-1.2-3s.7-2.1 1-2.4c.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 2c.1.1.1.3 0 .5l-.4.5-.3.3c-.2.2-.3.4-.2.6.2.4.8 1.3 1.6 2 .9.9 1.7 1.1 2 1.3.2.1.4.1.6-.1l.7-.9c.2-.2.4-.2.6-.1l1.9.9c.3.1.4.2.5.3.1.2.1.7-.1 1.3z"/></svg>Lembrar</a></div>`;
+      h+=`<div class="lr"><div><b>${esc(c.nome)}</b><div class="c" style="font-size:12px">${c.dias} dias sem cortar</div></div>
+        <a class="wabtn" href="${safeUrl(url)}" target="_blank" rel="noopener"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15l-1.3 4.7 4.8-1.3A10 10 0 1 0 12 2zm5.9 14.3c-.2.7-1.4 1.3-2 1.4-.5.1-1.2.1-1.9-.1-.4-.1-1-.3-1.7-.6-3-1.3-4.9-4.3-5-4.5-.2-.2-1.2-1.6-1.2-3s.7-2.1 1-2.4c.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 2c.1.1.1.3 0 .5l-.4.5-.3.3c-.2.2-.3.4-.2.6.2.4.8 1.3 1.6 2 .9.9 1.7 1.1 2 1.3.2.1.4.1.6-.1l.7-.9c.2-.2.4-.2.6-.1l1.9.9c.3.1.4.2.5.3.1.2.1.7-.1 1.3z"/></svg>Lembrar</a></div>`;
     });
   }
   if(S.tab==="conta"){
@@ -2108,8 +2128,8 @@ function renderBarber(){
       h+=`<div class="eyebrow">Minha conta</div><h1 class="bg">Meu perfil</h1>`;
       h+=`<div class="box" style="margin-bottom:14px"><div style="display:flex;align-items:center;gap:14px">
         ${avatarHtml("freela", fp.respNome||em, 64)}
-        <div style="flex:1"><div class="nm" style="font-size:17px">${fp.respNome||"Freelancer"}</div>
-          <div class="sb">${em}</div>
+        <div style="flex:1"><div class="nm" style="font-size:17px">${esc(fp.respNome||"Freelancer")}</div>
+          <div class="sb">${esc(em)}</div>
           <div class="sb" style="display:flex;align-items:center;gap:4px;margin-top:2px"><span class="rstar">${ICONS.star.replace('width="23" height="23"','width="13" height="13"')}</span> ${nota?nota+" · "+nAval+" avaliações":"Sem avaliações ainda"}</div></div>
       </div>
       <div class="fidwrap" style="border-top-color:rgba(0,0,0,.05);justify-content:flex-end;gap:8px">
@@ -2118,20 +2138,20 @@ function renderBarber(){
       </div></div>`;
       if(S.fpEdit){
         h+=`<div class="box" style="margin-bottom:14px">
-          <div class="field"><label>Nome completo</label><input id="fpNome" value="${fp.respNome||""}"></div>
+          <div class="field"><label>Nome completo</label><input id="fpNome" value="${esc(fp.respNome||"")}"></div>
           <div class="grid2">
-            <div class="field"><label>CPF/CNPJ</label><input id="fpDoc" value="${fp.cpfCnpj||""}" placeholder="Somente números"></div>
-            <div class="field"><label>WhatsApp</label><input id="fpTel" value="${fp.mobilePhone||""}" placeholder="(11) 99999-9999"></div>
+            <div class="field"><label>CPF/CNPJ</label><input id="fpDoc" value="${esc(fp.cpfCnpj||"")}" placeholder="Somente números"></div>
+            <div class="field"><label>WhatsApp</label><input id="fpTel" value="${esc(fp.mobilePhone||"")}" placeholder="(11) 99999-9999"></div>
           </div>
-          <div class="field"><label>Data de nascimento</label><input id="birthDate" type="tel" value="${fp.birthDate||""}" placeholder="dd/mm/aaaa"></div>
+          <div class="field"><label>Data de nascimento</label><input id="birthDate" type="tel" value="${esc(fp.birthDate||"")}" placeholder="dd/mm/aaaa"></div>
           <div class="sllbl" style="margin-bottom:8px">Especializações</div>
           ${svcPicker(fp.svc||(fp.svc={}), "fpsvc", "fpdur_")}
           <button class="btn" data-a="fpSave" style="margin-top:8px">Salvar perfil</button></div>`;
       } else {
-        if(fp.cpfCnpj) h+=`<div class="lr"><span class="c">${(fp.companyType&&fp.companyType!=="INDIVIDUAL")?"CNPJ":"CPF"}</span><b>${fp.cpfCnpj}</b></div>`;
-        if(fp.mobilePhone) h+=`<div class="lr"><span class="c">WhatsApp</span><b>${fp.mobilePhone}</b></div>`;
+        if(fp.cpfCnpj) h+=`<div class="lr"><span class="c">${(fp.companyType&&fp.companyType!=="INDIVIDUAL")?"CNPJ":"CPF"}</span><b>${esc(fp.cpfCnpj)}</b></div>`;
+        if(fp.mobilePhone) h+=`<div class="lr"><span class="c">WhatsApp</span><b>${esc(fp.mobilePhone)}</b></div>`;
         if(idade!=null) h+=`<div class="lr"><span class="c">Idade</span><b>${idade} anos</b></div>`;
-        if(esp.length) h+=`<div class="lr"><span class="c">Especializações</span><b style="text-align:right">${esp.join(" · ")}</b></div>`;
+        if(esp.length) h+=`<div class="lr"><span class="c">Especializações</span><b style="text-align:right">${esc(esp.join(" · "))}</b></div>`;
         h+=`<div class="lr"><span class="c">Tipo de conta</span><b>Freelancer</b></div>`;
       }
       h+=`<button class="btn out" data-a="expandir" style="margin-top:14px">Expandir meu negócio</button>`;
@@ -2142,7 +2162,7 @@ function renderBarber(){
     h+=`<div class="eyebrow">Minha conta</div><h1 class="bg">Sua barbearia</h1>`;
     h+=`<div class="box" style="margin-bottom:14px"><div style="display:flex;align-items:center;gap:14px">
       ${avatarHtml("studio", (profile&&profile.nomeFantasia)||em, 64)}
-      <div style="flex:1"><div class="nm" style="font-size:17px">${(profile&&profile.nomeFantasia)||"Studio"}</div><div class="sb">${em}</div></div>
+      <div style="flex:1"><div class="nm" style="font-size:17px">${esc((profile&&profile.nomeFantasia)||"Studio")}</div><div class="sb">${esc(em)}</div></div>
     </div>
     <div class="fidwrap" style="border-top-color:rgba(0,0,0,.05);justify-content:flex-end">${fotoBtn("studio")}</div></div>`;
     h+=planoBox();
@@ -2153,7 +2173,7 @@ function renderBarber(){
       const atual = S.dashShop && S.dashShop.id===sp.id;
       const st = sp.ativo ? `<span class="chip ok">Ativa</span>` : `<span class="chip" style="background:rgba(255,159,10,.2);color:#a86400">Inativa</span>`;
       const temLoc = sp.lat!=null && sp.lng!=null;
-      h+=`<div class="box" style="margin-bottom:10px;${atual?'border-color:var(--gold)':''}"><div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><div class="nm" style="font-size:15px">${sp.nome||"(sem nome)"}</div><div class="sb">${sp.bairro||""}${atual?" · em exibição":""}</div></div>${st}</div>
+      h+=`<div class="box" style="margin-bottom:10px;${atual?'border-color:var(--gold)':''}"><div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><div class="nm" style="font-size:15px">${esc(sp.nome||"(sem nome)")}</div><div class="sb">${esc(sp.bairro||"")}${atual?" · em exibição":""}</div></div>${st}</div>
         <div class="fidwrap" style="justify-content:flex-end;gap:8px;flex-wrap:wrap">${atual?"":`<button class="btn small" data-a="dash:${sp.id}">Abrir painel</button>`}<button class="btn out small" data-a="shopEdit:${sp.id}:dash">Editar</button><button class="btn out small" data-a="admBarb:${sp.id}:dash">Equipe</button><button class="btn out small" data-a="svcOpen:${sp.id}:dash">Serviços</button><button class="btn ${temLoc?'out':''} small" data-a="shopGeo:${sp.id}" style="margin:0">${temLoc?'✓ Localização':'📍 Adicionar localização'}</button></div>
         <div class="hint" id="shopGeoMsg_${sp.id}" style="margin:4px 0 0;text-align:right"></div></div>`;
     });
@@ -2185,7 +2205,7 @@ function planoBox(){
       <button class="btn" data-a="planForm" style="margin:10px 0 0">Vincular cartão e ativar</button></div>`;
   }
   return h + `<div class="box" style="margin-bottom:10px">
-    <div class="field"><label>Nome impresso no cartão</label><input id="plNome" placeholder="Como está no cartão" value="${(profile&&profile.respNome)||sp.responsavel||""}"></div>
+    <div class="field"><label>Nome impresso no cartão</label><input id="plNome" placeholder="Como está no cartão" value="${esc((profile&&profile.respNome)||sp.responsavel||"")}"></div>
     <div class="field"><label>Número do cartão</label><input id="plNum" type="tel" placeholder="0000 0000 0000 0000"></div>
     <div class="grid2">
       <div class="field"><label>Validade (MM/AA)</label><input id="plVal" type="tel" placeholder="MM/AA"></div>
@@ -2214,7 +2234,7 @@ async function planSubscribe(){
     if(d && d.subscriptionId){
       try{ await sb.from("shops").update({ plano_id:d.subscriptionId }).eq("id", sp.id); }catch(e){}
       sp.plano_id = d.subscriptionId; S.planForm=false; render();
-    } else planMsg('<span style="color:var(--cancel)">Não deu para ativar: '+((d&&d.error)||"erro")+'</span>');
+    } else planMsg('<span style="color:var(--cancel)">Não deu para ativar: '+esc((d&&d.error)||"erro")+'</span>');
   }catch(e){ planMsg('<span style="color:var(--cancel)">Falha de conexão. Tente de novo.</span>'); }
 }
 async function planCancel(){
@@ -2291,7 +2311,7 @@ function renderAdmin(){
     h += `<div class="sllbl" style="margin:4px 0 8px">Meus ícones (imagens)</div>`;
     h += `<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:6px">`;
     my.forEach(function(d,i){
-      h += `<div style="position:relative;width:46px;height:46px"><img src="${d}" alt="" style="width:46px;height:46px;border-radius:12px;object-fit:cover;border:1px solid rgba(0,0,0,.1)"><div data-a="myIconDel:${i}" role="button" title="Remover" style="position:absolute;top:-7px;right:-7px;width:20px;height:20px;border-radius:50%;background:var(--cancel);color:#fff;font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.3)">×</div></div>`;
+      h += `<div style="position:relative;width:46px;height:46px"><img src="${safeImg(d)}" alt="" style="width:46px;height:46px;border-radius:12px;object-fit:cover;border:1px solid rgba(0,0,0,.1)"><div data-a="myIconDel:${i}" role="button" title="Remover" style="position:absolute;top:-7px;right:-7px;width:20px;height:20px;border-radius:50%;background:var(--cancel);color:#fff;font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.3)">×</div></div>`;
     });
     h += `<label class="btn out small" style="margin:0;cursor:pointer;height:46px;display:flex;align-items:center;gap:6px;padding:0 14px">+ Imagem<input type="file" accept="image/*" data-av="myicon" style="display:none"></label>`;
     h += `</div>`;
@@ -2310,12 +2330,12 @@ function renderAdmin(){
         h += `<div class="box" style="margin-bottom:10px">
           <div style="display:flex;align-items:center;gap:12px">
             <div class="ic">${svcIcon(sv)}</div>
-            <div style="flex:1"><div class="nm" style="font-size:15px">${sv.nome||"(serviço)"}</div><div class="sb">${cur?"ícone escolhido":"ícone automático"}</div></div>
+            <div style="flex:1"><div class="nm" style="font-size:15px">${esc(sv.nome||"(serviço)")}</div><div class="sb">${cur?"ícone escolhido":"ícone automático"}</div></div>
             ${cur?`<button class="btn out small" data-a="svcIcon:${en}:" style="margin:0">Automático</button>`:""}
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">
             ${SVC_ICON_PALETTE.map(p=>`<div data-a="svcIcon:${en}:${p.key}" title="${p.label}" role="button" style="width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;background:${cur===p.key?'var(--accent)':'rgba(0,0,0,.08)'};color:${cur===p.key?'#fff':'var(--accent)'}">${ICONS[p.key]}</div>`).join("")}
-            ${my.map((d,i)=>`<div data-a="svcIconImg:${en}:${i}" role="button" title="Minha imagem" style="width:40px;height:40px;border-radius:12px;overflow:hidden;cursor:pointer;box-shadow:${cur===d?'0 0 0 3px var(--accent)':'0 0 0 1px rgba(0,0,0,.12)'}"><img src="${d}" alt="" style="width:100%;height:100%;object-fit:cover;display:block"></div>`).join("")}
+            ${my.map((d,i)=>`<div data-a="svcIconImg:${en}:${i}" role="button" title="Minha imagem" style="width:40px;height:40px;border-radius:12px;overflow:hidden;cursor:pointer;box-shadow:${cur===d?'0 0 0 3px var(--accent)':'0 0 0 1px rgba(0,0,0,.12)'}"><img src="${safeImg(d)}" alt="" style="width:100%;height:100%;object-fit:cover;display:block"></div>`).join("")}
           </div>
         </div>`;
       });
@@ -2350,7 +2370,7 @@ function renderAdmin(){
         <div class="kpi"><span class="l">Líquido (após taxas)</span><span class="v">${fmt(liq)}</span></div>
       </div>`;
     } else if(!S.admPay){ admPayLoad(); h += `<div class="lr" style="justify-content:center;color:var(--mut);margin-top:10px"><span class="spin" style="margin-right:8px"></span>Carregando pagamentos do Asaas…</div>`; }
-    else { h += `<div class="hint" style="margin-top:10px;text-align:center">${S.admPay.error||"Pagamentos indisponíveis."} <b data-a="admPayReload" style="cursor:pointer;color:var(--gold)">Tentar de novo</b></div>`; }
+    else { h += `<div class="hint" style="margin-top:10px;text-align:center">${esc(S.admPay.error||"Pagamentos indisponíveis.")} <b data-a="admPayReload" style="cursor:pointer;color:var(--gold)">Tentar de novo</b></div>`; }
     if(pend) h += `<div class="errmsg" style="margin-top:14px"><b>${pend} barbearia(s) aguardando aprovação</b> — veja a aba Barbearias.</div>`;
     h += `<button class="btn out" data-a="account" style="margin-top:14px">Voltar</button>`;
     main.innerHTML=h; return;
@@ -2359,16 +2379,16 @@ function renderAdmin(){
   if(tab==="pag"){
     h += `<div class="hint" style="margin-top:-6px;margin-bottom:12px">Cobranças e assinaturas de toda a plataforma, direto do Asaas.</div>`;
     if(!S.admPay){ admPayLoad(); h += `<div class="lr" style="justify-content:center;color:var(--mut)"><span class="spin" style="margin-right:8px"></span>Carregando…</div>`; }
-    else if(S.admPay.error){ h += `<div class="errmsg">${S.admPay.error}</div><button class="btn out small" data-a="admPayReload">Tentar de novo</button>`; }
+    else if(S.admPay.error){ h += `<div class="errmsg">${esc(S.admPay.error)}</div><button class="btn out small" data-a="admPayReload">Tentar de novo</button>`; }
     else {
       const stLbl = { RECEIVED:"Recebido", CONFIRMED:"Confirmado", PENDING:"Pendente", OVERDUE:"Vencido", REFUNDED:"Estornado", ACTIVE:"Ativa", EXPIRED:"Expirada", INACTIVE:"Inativa" };
       const stCor = st => (st==="RECEIVED"||st==="CONFIRMED"||st==="ACTIVE") ? "ok" : "";
       h += `<div class="sllbl" style="margin:4px 0 8px">Assinaturas (planos R$ 59,90)</div>`;
       if(!S.admPay.subs.length) h += `<div class="lr" style="justify-content:center;color:var(--mut)">Nenhuma assinatura ainda.</div>`;
-      S.admPay.subs.forEach(x=>{ h += `<div class="lr"><div><b>${fmt(+x.value)}</b><div class="c" style="font-size:12px">${x.desc||"Assinatura"} · próx. ${x.nextDue||"—"}</div></div><span class="chip ${stCor(x.status)}">${stLbl[x.status]||x.status}</span></div>`; });
+      S.admPay.subs.forEach(x=>{ h += `<div class="lr"><div><b>${fmt(+x.value)}</b><div class="c" style="font-size:12px">${esc(x.desc||"Assinatura")} · próx. ${esc(x.nextDue||"—")}</div></div><span class="chip ${stCor(x.status)}">${esc(stLbl[x.status]||x.status)}</span></div>`; });
       h += `<div class="sllbl" style="margin:16px 0 8px">Cobranças (PIX e cartão)</div>`;
       if(!S.admPay.payments.length) h += `<div class="lr" style="justify-content:center;color:var(--mut)">Nenhuma cobrança ainda.</div>`;
-      S.admPay.payments.forEach(x=>{ h += `<div class="lr"><div><b>${fmt(+x.value)}</b><div class="c" style="font-size:12px">${x.desc||x.type} · ${x.date||""}</div></div><span class="chip ${stCor(x.status)}">${stLbl[x.status]||x.status}</span></div>`; });
+      S.admPay.payments.forEach(x=>{ h += `<div class="lr"><div><b>${fmt(+x.value)}</b><div class="c" style="font-size:12px">${esc(x.desc||x.type)} · ${esc(x.date||"")}</div></div><span class="chip ${stCor(x.status)}">${esc(stLbl[x.status]||x.status)}</span></div>`; });
       h += `<button class="btn out small" data-a="admPayReload" style="margin-top:12px">Atualizar</button>`;
     }
     h += `<button class="btn out" data-a="account" style="margin-top:14px">Voltar</button>`;
@@ -2382,7 +2402,7 @@ function renderAdmin(){
     const st = sp.ativo ? `<span class="chip ok">Ativa</span>` : `<span class="chip" style="background:rgba(255,159,10,.2);color:#a86400">Pendente</span>`;
     const btn = sp.ativo ? `<button class="btn out small" data-a="admToggle:${sp.id}:0">Desativar</button>` : `<button class="btn small" data-a="admToggle:${sp.id}:1">Aprovar</button>`;
     const emTeste = !sp.plano_id && sp.trial_until && planoOk(sp);
-    const trialChip = sp.plano_id ? `<span class="chip ok">Plano ativo</span>` : (emTeste ? `<span class="chip ok">Teste até ${sp.trial_until.split("-").reverse().join("/")}</span>` : "");
+    const trialChip = sp.plano_id ? `<span class="chip ok">Plano ativo</span>` : (emTeste ? `<span class="chip ok">Teste até ${esc(sp.trial_until.split("-").reverse().join("/"))}</span>` : "");
     const trialBtn = sp.plano_id ? "" : (emTeste
       ? `<button class="btn out small" data-a="admTrial:${sp.id}:0">Encerrar teste</button>`
       : `<button class="btn out small" data-a="admTrial:${sp.id}:1">🎁 Mês grátis</button>`);
@@ -2396,7 +2416,7 @@ function renderAdmin(){
     const aviso = faltas.length
       ? `<div class="sb" style="color:#a86400;margin-top:6px">⚠️ Não aparece pro cliente — falta: ${faltas.join(" + ")}${faltas.indexOf("localização")<0?' (confira também 1 barbeiro)':''}</div>`
       : `<div class="sb" style="color:#1f8f3e;margin-top:6px">✅ Aparece pro cliente (se tiver 1 barbeiro)</div>`;
-    h += `<div class="box" style="margin-bottom:10px"><div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><div class="nm" style="font-size:15px">${sp.nome||"(sem nome)"}</div><div class="sb">${sp.responsavel||""}${sp.email?" · "+sp.email:""}</div><div class="sb">${sp.bairro||""} ${sp.cep||""}</div></div>${trialChip}${st}</div>
+    h += `<div class="box" style="margin-bottom:10px"><div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><div class="nm" style="font-size:15px">${esc(sp.nome||"(sem nome)")}</div><div class="sb">${esc(sp.responsavel||"")}${sp.email?" · "+esc(sp.email):""}</div><div class="sb">${esc(sp.bairro||"")} ${esc(sp.cep||"")}</div></div>${trialChip}${st}</div>
       ${aviso}
       <div class="fidwrap" style="justify-content:flex-end;gap:8px;flex-wrap:wrap"><button class="btn out small" data-a="svcOpen:${sp.id}:admin">Serviços</button><button class="btn out small" data-a="admBarb:${sp.id}">Barbeiros</button><button class="btn out small" data-a="shopEdit:${sp.id}:admin">Editar</button>${trialBtn}${walletBtn}${btn}<button class="btn out small" data-a="admDel:${sp.id}" style="color:var(--cancel);border-color:rgba(255,59,48,.35)">Excluir</button></div></div>`;
   });
@@ -2478,7 +2498,7 @@ async function admDelShop(id){
 function renderSvcEditor(){
   tabbar.style.display="none"; steps.style.display="none";
   const sh = S.svcShop; const cur = S.svcList || [];
-  let h = `<div class="eyebrow">Serviços · ${sh.nome||""}</div><h1 class="bg">Serviços e preços</h1><div class="hint" style="margin-top:-6px;margin-bottom:12px">Adicione, remova ou altere o preço dos serviços oferecidos.</div><div id="svcerr"></div>`;
+  let h = `<div class="eyebrow">Serviços · ${esc(sh.nome||"")}</div><h1 class="bg">Serviços e preços</h1><div class="hint" style="margin-top:-6px;margin-bottom:12px">Adicione, remova ou altere o preço dos serviços oferecidos.</div><div id="svcerr"></div>`;
   CATALOGO.forEach(function(c){
     const has = cur.find(function(x){ return x.nome===c.nome; });
     if(has){
@@ -2491,7 +2511,7 @@ function renderSvcEditor(){
   h += `<button class="btn out" data-a="svcBack" style="margin-top:12px">Voltar</button>`;
   main.innerHTML = h;
 }
-function svcErr(msg){ const el=document.getElementById("svcerr"); if(el){ el.innerHTML=`<div class="errmsg">${msg}</div>`; el.scrollIntoView({block:"center"}); } }
+function svcErr(msg){ const el=document.getElementById("svcerr"); if(el){ el.innerHTML=`<div class="errmsg">${esc(msg)}</div>`; el.scrollIntoView({block:"center"}); } }
 async function svcOpen(shopId, back){
   if(back) S.svcBack = back;
   let sh = (S.adminShops||[]).concat(S.myShops||[]).find(function(x){ return x.id===shopId; }) || S.svcShop;
@@ -2571,23 +2591,23 @@ function espChips(sel, action){
   let h = `<div class="slots" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">`;
   all.forEach(function(x){
     const on = (sel||[]).indexOf(x)>=0;
-    h += `<div class="slot ${on?"sel":""}" style="font-size:13px;padding:12px 4px" data-a="${action}:${x}">${x}</div>`;
+    h += `<div class="slot ${on?"sel":""}" style="font-size:13px;padding:12px 4px" data-a="${action}:${esc(x)}">${esc(x)}</div>`;
   });
   h += `</div>`;
   return h;
 }
 function espCustomRow(inputId, action, val){
-  return `<div style="display:flex;gap:8px;align-items:stretch;margin-bottom:14px"><div class="field" style="flex:1;margin:0"><input id="${inputId}" type="text" placeholder="Outra especialidade… Ex.: Relaxamento" value="${val||""}"></div><button class="btn out small" data-a="${action}" style="white-space:nowrap">Adicionar</button></div>`;
+  return `<div style="display:flex;gap:8px;align-items:stretch;margin-bottom:14px"><div class="field" style="flex:1;margin:0"><input id="${inputId}" type="text" placeholder="Outra especialidade… Ex.: Relaxamento" value="${esc(val||"")}"></div><button class="btn out small" data-a="${action}" style="white-space:nowrap">Adicionar</button></div>`;
 }
 function renderAdminBarbers(){
   tabbar.style.display="none"; steps.style.display="none";
   const sh = S.barbShop; const links = S.barbLinks||[]; const all = S.allBarbers||[];
   if(S.espEdit){
     const b = S.espEdit.barber;
-    let h = `<div class="eyebrow">Barbeiro · ${b.nome}</div><h1 class="bg">Editar barbeiro</h1><div class="hint" style="margin-top:-6px;margin-bottom:12px">Foto, nome, WhatsApp e especialidades. Os agendamentos chegam no WhatsApp abaixo.</div><div id="barberr"></div>`;
+    let h = `<div class="eyebrow">Barbeiro · ${esc(b.nome)}</div><h1 class="bg">Editar barbeiro</h1><div class="hint" style="margin-top:-6px;margin-bottom:12px">Foto, nome, WhatsApp e especialidades. Os agendamentos chegam no WhatsApp abaixo.</div><div id="barberr"></div>`;
     const bf = b.foto || getBarberFoto(b.id);
     h += `<div style="display:flex;align-items:center;gap:14px;margin:2px 0 14px">${
-      bf ? `<img src="${bf}" alt="" style="width:64px;height:64px;border-radius:50%;object-fit:cover;flex:none">`
+      bf ? `<img src="${safeImg(bf)}" alt="" style="width:64px;height:64px;border-radius:50%;object-fit:cover;flex:none">`
          : `<div class="av" style="width:64px;height:64px;flex:none">${ini(b.nome||"?")}</div>`}
       <label class="btn out small" style="margin:0;cursor:pointer">${bf?'Trocar foto':'Adicionar foto'}<input type="file" accept="image/*" data-av="barberedit" style="display:none"></label></div>`;
     h += field("beNome","Nome do barbeiro",{req:true,ph:"Ex.: Carlos Silva",val:(S.espEdit.nome!==undefined?S.espEdit.nome:(b.nome||""))});
@@ -2601,7 +2621,7 @@ function renderAdminBarbers(){
     const bemail = getBarberEmail(b);
     h += `<div class="sllbl" style="margin:22px 0 8px">Login do barbeiro (acesso)</div>`;
     if(bemail){
-      h += `<div class="box"><div class="lr" style="border:none;padding:0"><span class="c">Login (e-mail)</span><b style="word-break:break-all">${bemail}</b></div>
+      h += `<div class="box"><div class="lr" style="border:none;padding:0"><span class="c">Login (e-mail)</span><b style="word-break:break-all">${esc(bemail)}</b></div>
         <div class="hint" style="margin-top:8px">O barbeiro entra em <b>Minha conta</b> com esse e-mail e a senha definida, e vê a própria agenda. Esqueceu a senha? Ele usa "Esqueci a senha" na tela de login.</div></div>`;
     } else {
       h += `<div class="box">`+
@@ -2614,18 +2634,18 @@ function renderAdminBarbers(){
   }
   const inShop = links.map(function(l){ return all.find(function(b){ return b.id===l.barber_id; }) || {id:l.barber_id, nome:"(barbeiro)"}; });
   const out = all.filter(function(b){ return !links.some(function(l){ return l.barber_id===b.id; }); });
-  let h = `<div class="eyebrow">Barbeiros · ${sh.nome||""}</div><h1 class="bg">Equipe da barbearia</h1><div class="hint" style="margin-top:-6px;margin-bottom:12px">Inclua ou retire barbeiros desta barbearia.</div><div id="barberr"></div>`;
+  let h = `<div class="eyebrow">Barbeiros · ${esc(sh.nome||"")}</div><h1 class="bg">Equipe da barbearia</h1><div class="hint" style="margin-top:-6px;margin-bottom:12px">Inclua ou retire barbeiros desta barbearia.</div><div id="barberr"></div>`;
   h += `<div class="sllbl" style="margin:4px 0 8px">Na equipe</div>`;
   if(!inShop.length) h += `<div class="lr" style="justify-content:center;color:var(--mut)">Nenhum barbeiro nesta barbearia ainda.</div>`;
   inShop.forEach(function(b){
     const em = getBarberEmail(b);
-    h += `<div class="box" style="margin-bottom:10px;border-color:var(--gold)"><div style="display:flex;align-items:center;gap:10px">${barberAvatarHtml(b,44)}<div style="flex:1"><div class="nm" style="font-size:15px">${b.nome}</div><div class="sb">${(b.especialidades||[]).join(" · ")||"sem especialidades"}</div><div class="sb" style="margin-top:2px">${em?`🔑 ${em}`:`<span style="color:var(--mut)">sem login</span>`}</div></div></div>
+    h += `<div class="box" style="margin-bottom:10px;border-color:var(--gold)"><div style="display:flex;align-items:center;gap:10px">${barberAvatarHtml(b,44)}<div style="flex:1"><div class="nm" style="font-size:15px">${esc(b.nome)}</div><div class="sb">${esc((b.especialidades||[]).join(" · ")||"sem especialidades")}</div><div class="sb" style="margin-top:2px">${em?`🔑 ${esc(em)}`:`<span style="color:var(--mut)">sem login</span>`}</div></div></div>
       <div class="fidwrap" style="justify-content:flex-end;gap:8px;margin-top:8px"><button class="btn out small" data-a="admBarbEd:${b.id}">Editar</button><button class="btn out small" data-a="admBarbDel:${b.id}">Retirar</button></div></div>`;
   });
   if(out.length){
     h += `<div class="sllbl" style="margin:16px 0 8px">Outros barbeiros cadastrados</div>`;
     out.forEach(function(b){
-      h += `<div class="box" style="margin-bottom:10px"><div style="display:flex;align-items:center;gap:10px">${barberAvatarHtml(b,44)}<div style="flex:1"><div class="nm" style="font-size:15px">${b.nome}</div><div class="sb">${(b.especialidades||[]).join(" · ")}</div></div><button class="btn small" data-a="admBarbAdd:${b.id}">Incluir</button></div><div class="fidwrap" style="justify-content:flex-end;gap:8px;margin-top:8px"><button class="btn out small" data-a="admBarbEd:${b.id}">Editar</button></div></div>`;
+      h += `<div class="box" style="margin-bottom:10px"><div style="display:flex;align-items:center;gap:10px">${barberAvatarHtml(b,44)}<div style="flex:1"><div class="nm" style="font-size:15px">${esc(b.nome)}</div><div class="sb">${esc((b.especialidades||[]).join(" · "))}</div></div><button class="btn small" data-a="admBarbAdd:${b.id}">Incluir</button></div><div class="fidwrap" style="justify-content:flex-end;gap:8px;margin-top:8px"><button class="btn out small" data-a="admBarbEd:${b.id}">Editar</button></div></div>`;
     });
   }
   h += `<div class="sllbl" style="margin:16px 0 8px">Novo barbeiro</div>`;
@@ -2646,7 +2666,7 @@ function opFail(prefix, err){
   try{ window.alert(prefix + "\n\n" + msg); }catch(e){}
   return prefix + " " + msg;
 }
-function barbErr(msg){ const el=document.getElementById("barberr"); if(el){ el.innerHTML=`<div class="errmsg">${msg}</div>`; el.scrollIntoView({block:"center"}); } }
+function barbErr(msg){ const el=document.getElementById("barberr"); if(el){ el.innerHTML=`<div class="errmsg">${esc(msg)}</div>`; el.scrollIntoView({block:"center"}); } }
 function nbRead(){
   const n=document.getElementById("nbNome"); if(n) S.nbNome=n.value;
   const t=document.getElementById("nbTel"); if(t) S.nbTel=t.value;
@@ -2752,11 +2772,11 @@ function horaSel(v){ return (v===null||v===undefined||v==="") ? "" : ((v<10?"0"+
 function renderAdminEdit(){
   tabbar.style.display="none"; steps.style.display="none";
   const sp = S.editShop;
-  let h = `<div class="eyebrow">Editar · ${sp.nome||"barbearia"}</div><h1 class="bg">Dados da barbearia</h1><div class="hint" style="margin-top:-6px;margin-bottom:12px">Altere o que precisar e salve.</div><div id="editerr"></div>`;
+  let h = `<div class="eyebrow">Editar · ${esc(sp.nome||"barbearia")}</div><h1 class="bg">Dados da barbearia</h1><div class="hint" style="margin-top:-6px;margin-bottom:12px">Altere o que precisar e salve.</div><div id="editerr"></div>`;
   // foto da barbearia (aparece para o cliente)
   const fotoAtual = sp.foto || getShopFoto(sp.id);
   h += `<div class="box" style="margin-bottom:14px"><div style="display:flex;align-items:center;gap:14px">
-    ${fotoAtual?`<img src="${fotoAtual}" alt="" style="width:56px;height:56px;border-radius:50%;object-fit:cover;flex:none">`:`<div class="av" style="width:56px;height:56px;flex:none">${ini(sp.nome||"?")}</div>`}
+    ${fotoAtual?`<img src="${safeImg(fotoAtual)}" alt="" style="width:56px;height:56px;border-radius:50%;object-fit:cover;flex:none">`:`<div class="av" style="width:56px;height:56px;flex:none">${ini(sp.nome||"?")}</div>`}
     <div style="flex:1"><div class="nm" style="font-size:15px">Foto da barbearia</div><div class="sb">Aparece para os clientes na página inicial.</div></div>
     <label class="btn out small" style="margin:0;cursor:pointer">${fotoAtual?'Trocar foto':'Adicionar foto'}<input type="file" accept="image/*" data-av="shopedit" style="display:none"></label>
   </div></div>`;
@@ -2850,7 +2870,7 @@ async function admEditSave(){
     }).eq("id", sp.id);
     err=r.error;
   }catch(e){ err=e; }
-  if(err){ const msg=opFail("Não foi possível salvar as alterações.", err); const el=document.getElementById("editerr"); if(el){ el.innerHTML=`<div class="errmsg">${msg}</div>`; el.scrollIntoView({block:"center"}); } return; }
+  if(err){ const msg=opFail("Não foi possível salvar as alterações.", err); const el=document.getElementById("editerr"); if(el){ el.innerHTML=`<div class="errmsg">${esc(msg)}</div>`; el.scrollIntoView({block:"center"}); } return; }
   S.editShop=null;
   if(S.editBack==="dash"){ S.myShops=undefined; S.role="barber"; S.tab="conta"; render(); }
   else if(S.editBack==="account"){ S.myShops=undefined; S.role="account"; S.accStage="home"; render(); }
